@@ -43,7 +43,8 @@ async function callback(req, res) {
 
     console.log("✅ Token Generated & Saved");
 
-    res.send("✅ Login Successful!");
+    
+    res.redirect("/dashboard.html");
 
   } catch (err) {
     console.error("❌ Token Error:", err.response?.data);

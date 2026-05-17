@@ -1,414 +1,151 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Algo Dashboard</title>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LifeLine Algo System</title>
   <style>
-    body {
-      margin: 0;
-      font-family: "Segoe UI", sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      font-size: 14px;
-    }
+    body { margin:0; font-family: Arial, sans-serif; background:#0f172a; color:#fff; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:15px 30px; background:#1e293b; }
+    .logo { font-size:22px; font-weight:bold; }
+    nav button { margin-left:10px; padding:8px 15px; border:none; border-radius:5px; cursor:pointer; }
+    .primary { background:#22c55e; color:#000; }
+    .secondary { background:#334155; color:#fff; }
+    .hero { text-align:center; padding:80px 20px; }
+    .hero h1 { font-size:40px; margin-bottom:15px; }
+    .hero p { font-size:18px; color:#cbd5f5; }
+    .cta { margin-top:20px; }
+    .cta button { margin:5px; padding:12px 20px; font-size:16px; }
+    footer { text-align:center; padding:20px; background:#1e293b; margin-top:50px; font-size:14px; color:#94a3b8; }
 
-    header {
-      background: #020617;
-      padding: 18px 24px;
-      font-size: 24px;
-      font-weight: 700;
-      border-bottom: 1px solid #1e293b;
-    }
-
-    .container {
-      display: flex;
-      height: calc(100vh - 70px);
-    }
-
-    .sidebar {
-      width: 280px;
-      background: #020617;
-      padding: 20px;
-      border-right: 1px solid #1e293b;
-    }
-
-    .main {
-      flex: 1;
-      padding: 20px;
-      overflow-y: auto;
-    }
-
-    .card {
-      background: #0f172a;
-      padding: 16px;
-      border-radius: 10px;
-      margin-bottom: 15px;
-      border: 1px solid #1e293b;
-    }
-
-    .card b {
-      font-size: 16px;
-    }
-
-    button {
-      padding: 8px 16px;
-      border: none;
-      border-radius: 8px;
-      cursor: pointer;
-      margin-right: 5px;
-      font-size: 14px;
-    }
-
-    .start { background: #22c55e; }
-    .stop { background: #ef4444; }
-    .login { background: #3b82f6; }
-
-    .dot {
-      height: 10px;
-      width: 10px;
-      border-radius: 50%;
-      display: inline-block;
-      margin-right: 5px;
-    }
-
-    .on { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
-    .off { background: #ef4444; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-    }
-
-    th, td {
-      padding: 12px 14px;
-      border-bottom: 1px solid #1e293b;
-    }
-
-    th {
-      color: #94a3b8;
-      font-weight: 600;
-      font-size: 13px;
-    }
-
-    td:nth-child(2),
-    td:nth-child(4),
-    td:nth-child(5),
-    td:nth-child(6) {
-      text-align: right;
-    }
-
-    th:nth-child(2),
-    th:nth-child(4),
-    th:nth-child(5),
-    th:nth-child(6) {
-      text-align: right;
-    }
-
-    .profit { color: #22c55e; font-weight: 600; }
-    .loss { color: #ef4444; font-weight: 600; }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr;
-      gap: 20px;
-    }
-
-    .big-pnl {
-      font-size: 36px;
-      font-weight: 700;
-    }
-
-    #signals, #orders {
-      padding-left: 15px;
-      word-break: break-all;
-      font-family: monospace;
-      font-size: 12px;
-    }
+    /* Modal */
+    .modal { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); justify-content:center; align-items:center; }
+    .modal-content { background:#1e293b; padding:25px; border-radius:10px; width:320px; text-align:center; }
+    .modal input { width:90%; padding:10px; margin:10px 0; border:none; border-radius:5px; }
+    .close { float:right; cursor:pointer; color:#fff; }
+    .link { color:#22c55e; cursor:pointer; font-size:14px; }
   </style>
 </head>
-
 <body>
 
-<header>🚀 Algo Trading Dashboard</header>
+<header>
+  <div class="logo">LifeLine Algo System</div>
+  <nav>
+    <button class="secondary">Home</button>
+    <button class="secondary">Pricing</button>
+    <button class="secondary">Contact Us</button>
+    <button class="secondary" onclick="openLogin()">Sign In</button>
+    <button class="primary" onclick="openSignup()">Sign Up</button>
+  </nav>
+</header>
 
-<div class="container">
+<section class="hero">
+  <h1>Welcome to LifeLine Algo System</h1>
+  <p>Smart Algo Trading | Auto Execution | Copy Trading Made Easy</p>
 
-  <!-- SIDEBAR -->
-  <div class="sidebar">
-
-    <div class="card">
-      <b>⚙️ Controls</b><br><br>
-      <button class="start" onclick="startTrading()">Start</button>
-      <button class="stop" onclick="stopTrading()">Stop</button>
-      <button class="login" onclick="loginUpstox()">Login</button>
-      <br><br>
-      <div id="controlStatus"></div>
-    </div>
-
-    <div class="card">
-      <b>👤 Account</b>
-      <div id="profile">Not Logged</div>
-    </div>
-
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <b>📡 Signals</b>
-        <span style="cursor: pointer; display: flex; align-items: center;" onclick="copyAllSignals()" title="Copy all signals">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-        </span>
-      </div>
-      <ul id="signals" style="list-style: none; padding-left: 0;"></ul>
-    </div>
-
-    <div class="card">
-      <b>💰 Orders</b>
-      <ul id="orders"></ul>
-    </div>
-
+  <div class="cta">
+    <button class="primary" onclick="openLogin()">Start Trading</button>
+    <button class="secondary">Learn More</button>
   </div>
+</section>
 
-  <!-- MAIN -->
-  <div class="main">
-
-    <div class="card">
-      <b>📊 Market Overview</b>
-      <div class="big-pnl" id="pnl">0</div>
-    </div>
-
-    <div class="grid">
-
-      <!-- POSITIONS -->
-      <div class="card">
-        <b>📊 Positions</b>
-        <button onclick="downloadPositions()">Download</button>
-
-        <table>
-          <thead>
-            <tr>
-              <th>Symbol</th>
-              <th>Qty</th>
-              <th>Type</th>
-              <th>Entry</th>
-              <th>LTP</th>
-              <th>PnL</th>
-            </tr>
-          </thead>
-          <tbody id="positionsTable"></tbody>
-        </table>
-      </div>
-
-      <!-- DAILY -->
-      <div class="card">
-        <b>📊 Daily Report</b>
-        <div id="daily"></div>
-      </div>
-
-    </div>
-
-    <!-- TRADE LOG -->
-    <div class="card">
-      <b>📝 Trade Log</b>
-      <button onclick="downloadTrades()">Download</button>
-
-      <table>
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Side</th>
-            <th>Qty</th>
-            <th>Symbol</th>
-            <th>PnL</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody id="tradesTable"></tbody>
-      </table>
-    </div>
-
+<!-- LOGIN MODAL -->
+<div class="modal" id="loginModal">
+  <div class="modal-content">
+    <span class="close" onclick="closeModal('loginModal')">&times;</span>
+    <h3>Sign In</h3>
+    <input type="text" placeholder="User ID" id="loginUser">
+<input type="password" placeholder="Password" id="loginPass">
+<button class="primary" onclick="login()">Login</button>
+    <p>Don't have an account? <span class="link" onclick="switchToSignup()">Sign Up</span></p>
   </div>
-
 </div>
 
+<!-- SIGNUP MODAL -->
+<div class="modal" id="signupModal">
+  <div class="modal-content">
+    <span class="close" onclick="closeModal('signupModal')">&times;</span>
+    <h3>Sign Up</h3>
+    <input type="text" placeholder="Full Name" id="signupName">
+    <input type="email" placeholder="Email ID" id="signupEmail">
+    <input type="tel" placeholder="Phone Number" id="signupPhone">
+    <input type="password" placeholder="Password" id="signupPassword">
+    <input type="password" placeholder="Confirm Password" id="signupConfirmPassword">
+    <button class="primary" onclick="validateSignup()">Create Account</button>
+    <p id="signupMsg"></p>
+    <p>Already have an account? <span class="link" onclick="switchToLogin()">Sign In</span></p>
+  </div>
+</div>
+
+<footer>
+  <p>© 2026 LifeLine Algo System. All Rights Reserved.</p>
+  <p>Trade Smart. Trade Fast. Trade with LifeLine Algo System.</p>
+</footer>
+
 <script>
-const socket = io();
-let tradeData = [];
-let positionData = [];
+  function openLogin() {
+    document.getElementById("loginModal").style.display = "flex";
+  }
 
-// SIGNALS
-socket.on("signal", d => {
-  const li = document.createElement("li");
-  li.style.marginBottom = "8px";
-  li.style.borderBottom = "1px solid #1e293b";
-  li.style.paddingBottom = "4px";
-  li.style.display = "flex";
-  li.style.justifyContent = "space-between";
-  li.style.alignItems = "flex-start";
+  function openSignup() {
+    document.getElementById("signupModal").style.display = "flex";
+  }
 
-  const text = document.createElement("span");
-  text.innerText = JSON.stringify(d);
-  
-  const copyBtn = document.createElement("span");
-  copyBtn.style.cursor = "pointer";
-  copyBtn.style.marginLeft = "8px";
-  copyBtn.style.display = "flex";
-  copyBtn.style.alignItems = "center";
-  copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
-  
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(JSON.stringify(d));
-    const originalIcon = copyBtn.innerHTML;
-    copyBtn.innerText = "✅";
-    setTimeout(() => copyBtn.innerHTML = originalIcon, 1000);
-  };
+  function closeModal(id) {
+    document.getElementById(id).style.display = "none";
+  }
 
-  li.appendChild(text);
-  li.appendChild(copyBtn);
-  signals.prepend(li);
-});
+  function switchToSignup() {
+    closeModal('loginModal');
+    openSignup();
+  }
 
-function copyAllSignals() {
-  const signalList = Array.from(document.querySelectorAll("#signals li span:first-child"))
-    .map(span => span.innerText)
-    .join("\n");
-  navigator.clipboard.writeText(signalList);
-  alert("All signals copied!");
+  function switchToLogin() {
+    closeModal('signupModal');
+    openLogin();
+  }
+
+  window.onclick = function(event) {
+    const loginModal = document.getElementById("loginModal");
+    const signupModal = document.getElementById("signupModal");
+    if (event.target === loginModal) loginModal.style.display = "none";
+    if (event.target === signupModal) signupModal.style.display = "none";
+  }
+
+  function validateSignup() {
+    const name = document.getElementById('signupName').value;
+    const email = document.getElementById('signupEmail').value;
+    const phone = document.getElementById('signupPhone').value;
+    const pass = document.getElementById('signupPassword').value;
+    const confirmPass = document.getElementById('signupConfirmPassword').value;
+
+    if (!name || !email || !phone || !pass || !confirmPass) {
+      document.getElementById('signupMsg').innerText = 'All fields are required';
+      return;
+    }
+
+    if (pass !== confirmPass) {
+      document.getElementById('signupMsg').innerText = 'Passwords do not match';
+      return;
+    }
+
+    document.getElementById('signupMsg').innerText = 'Signup successful (connect backend)';
+  }
+function login() {
+  const user = document.getElementById("loginUser").value;
+  const pass = document.getElementById("loginPass").value;
+
+  // Dummy validation (replace with backend later)
+  if (user === "admin" && pass === "1234") {
+    // Redirect to dashboard
+    window.location.href = "dashboard.html";
+  } else {
+    alert("Invalid login credentials");
+  }
 }
-
-// ORDERS
-socket.on("order", d => {
-  const li = document.createElement("li");
-  li.innerText = JSON.stringify(d);
-  orders.prepend(li);
-});
-
-// CONTROL
-async function startTrading(){ await fetch("/start"); }
-async function stopTrading(){ await fetch("/stop"); }
-function loginUpstox(){ window.location.href="/login"; }
-
-async function loadControl(){
-  const d = await (await fetch("/control")).json();
-  controlStatus.innerHTML =
-    d.trading
-    ? '<span class="dot on"></span> Trading ON'
-    : '<span class="dot off"></span> Trading OFF';
-}
-
-// PROFILE
-async function loadProfile(){
-  const d = await (await fetch("/profile")).json();
-  profile.innerText = d.loggedIn
-    ? `${d.name} (${d.clientId})`
-    : "Not Logged In";
-}
-
-// POSITIONS
-async function loadPositions(){
-  const data = await (await fetch("/positions")).json();
-  positionData = data;
-
-  let total = 0;
-  positionsTable.innerHTML = "";
-
-  data.forEach(p=>{
-    const type = p.quantity >= 0 ? "BUY" : "SELL";
-    const entry = p.average_price || 0;
-    const ltp = p.last_price || 0;
-    const pnl = p.pnl || 0;
-    const cls = pnl>=0?"profit":"loss";
-
-    positionsTable.innerHTML += `
-      <tr>
-        <td>${p.trading_symbol}</td>
-        <td>${Math.abs(p.quantity)}</td>
-        <td>${type}</td>
-        <td>${entry}</td>
-        <td>${ltp}</td>
-        <td class="${cls}">${pnl}</td>
-      </tr>
-    `;
-
-    total += pnl;
-  });
-
-  pnl.innerText = total.toFixed(2);
-}
-
-// DOWNLOAD POSITIONS CSV
-function downloadPositions(){
-  let csv="Symbol,Qty,Type,Entry,LTP,PnL\n";
-
-  positionData.forEach(p=>{
-    const type = p.quantity >= 0 ? "BUY" : "SELL";
-    csv+=`${p.trading_symbol},${Math.abs(p.quantity)},${type},${p.average_price},${p.last_price},${p.pnl}\n`;
-  });
-
-  const blob=new Blob([csv], { type: "text/csv" });
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="positions.csv";
-  a.click();
-}
-
-// TRADES
-async function loadTrades(){
-  const data = await (await fetch("/trades")).json();
-  tradeData = data;
-
-  tradesTable.innerHTML="";
-  data.forEach(t=>{
-    const cls = t.pnl>=0?"profit":"loss";
-    tradesTable.innerHTML+=`
-      <tr>
-        <td>${new Date(t.time).toLocaleTimeString()}</td>
-        <td>${t.side}</td>
-        <td>${t.quantity}</td>
-        <td>${t.instrument}</td>
-        <td class="${cls}">${t.pnl}</td>
-        <td>${t.status}</td>
-      </tr>`;
-  });
-}
-
-// DOWNLOAD TRADES
-function downloadTrades(){
-  let csv="Time,Side,Qty,Instrument,PnL,Status\n";
-
-  tradeData.forEach(t=>{
-    csv+=`${t.time},${t.side},${t.quantity},${t.instrument},${t.pnl},${t.status}\n`;
-  });
-
-  const blob=new Blob([csv], { type: "text/csv" });
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob);
-  a.download="trades.csv";
-  a.click();
-}
-
-// DAILY
-async function loadPnL(){
-  const d = await (await fetch("/pnl")).json();
-  daily.innerText = `Trades: ${d.totalTrades} | PnL: ${d.totalPnL}`;
-}
-
-// AUTO REFRESH
-setInterval(()=>{
-  loadControl();
-  loadProfile();
-  loadPositions();
-  loadTrades();
-  loadPnL();
-},3000);
-
-// INIT
-loadControl();
-loadProfile();
-loadPositions();
-loadTrades();
-loadPnL();
 </script>
 
 </body>
 </html>
+
+
