@@ -10,6 +10,49 @@ const { decodeSymbol } = require("./symbolDecoder");
 
 const { addPosition, removePosition } = require("./positionCache");
 
+// ==============================
+// 🕒 MARKET TIME CHECK
+// ==============================
+
+function isMarketOpen() {
+
+  const now = new Date();
+
+  const istTime = new Date(
+    now.toLocaleString("en-US", {
+      timeZone: "Asia/Kolkata",
+    })
+  );
+
+  const day = istTime.getDay();
+
+  const hours = istTime.getHours();
+
+  const minutes = istTime.getMinutes();
+
+  // Weekend
+  if (day === 0 || day === 6) {
+
+    return false;
+  }
+
+  const currentMinutes =
+    hours * 60 + minutes;
+
+  // NSE Market Timing
+  const marketStart =
+    9 * 60 + 15;
+
+  const marketEnd =
+    15 * 60 + 30;
+
+  return (
+
+    currentMinutes >= marketStart &&
+
+    currentMinutes <= marketEnd
+  );
+}
 
 async function fetchExecutedPrice(orderId, token) {
 
@@ -120,6 +163,7 @@ console.log(
   "🧠 Decoded:",
   decoded
 );
+
     // ==============================
     // 🔍 STEP 3: FIND INSTRUMENT
     // ==============================
@@ -221,7 +265,8 @@ if (instrumentData) {
 
       trigger_price: 0,
 
-      is_amo: false
+      // ✅ AUTO AMO
+      is_amo: !isMarketOpen()
     };
 
     console.log(
@@ -281,6 +326,7 @@ if (!tradePrice) {
       token
     );
 }
+
     if (!tradePrice) {
 
       console.log(
@@ -294,10 +340,6 @@ if (!tradePrice) {
 
     if (action === "BUY") {
 
-      // ==========================
-      // CHECK OPEN SELL POSITION
-      // ==========================
-
       const openSellTrade =
         await Trade.findOne({
 
@@ -307,10 +349,6 @@ if (!tradePrice) {
 
           status: "OPEN"
         });
-
-      // ==========================
-      // BUY EXIT FOR SELL POSITION
-      // ==========================
 
       if (openSellTrade) {
 
@@ -333,7 +371,9 @@ if (!tradePrice) {
           new Date();
 
         await openSellTrade.save();
-removePosition(rawSymbol);
+
+        removePosition(rawSymbol);
+
         await Trade.create({
 
           side: "BUY",
@@ -362,10 +402,6 @@ removePosition(rawSymbol);
         );
       }
 
-      // ==========================
-      // FRESH BUY POSITION
-      // ==========================
-
       else {
 
         await Trade.create({
@@ -392,10 +428,6 @@ removePosition(rawSymbol);
           "🟢 BUY Trade Recorded"
         );
 
-        // ==========================
-        // 🎯 TARGET
-        // ==========================
-
         const targetPoints =
           Number(
             order.TARGET || 10
@@ -406,10 +438,6 @@ removePosition(rawSymbol);
           Number(tradePrice) +
 
           targetPoints;
-
-        // ==========================
-        // 💾 SAVE POSITION
-        // ==========================
 
         addPosition(rawSymbol, {
 
@@ -434,10 +462,6 @@ removePosition(rawSymbol);
 
           time: new Date()
         });
-
-        // ==========================
-        // 📡 SUBSCRIBE
-        // ==========================
 
         const {
           subscribeSymbol
@@ -468,10 +492,6 @@ removePosition(rawSymbol);
 
     else if (action === "SELL") {
 
-      // ==========================
-      // CHECK OPEN BUY POSITION
-      // ==========================
-
       const openBuyTrade =
         await Trade.findOne({
 
@@ -481,10 +501,6 @@ removePosition(rawSymbol);
 
           status: "OPEN"
         });
-
-      // ==========================
-      // SELL EXIT FOR BUY POSITION
-      // ==========================
 
       if (openBuyTrade) {
 
@@ -507,7 +523,9 @@ removePosition(rawSymbol);
           new Date();
 
         await openBuyTrade.save();
-removePosition(rawSymbol);
+
+        removePosition(rawSymbol);
+
         await Trade.create({
 
           side: "SELL",
@@ -536,10 +554,6 @@ removePosition(rawSymbol);
         );
       }
 
-      // ==========================
-      // FRESH SELL POSITION
-      // ==========================
-
       else {
 
         console.log(
@@ -566,10 +580,6 @@ removePosition(rawSymbol);
           time: new Date()
         });
 
-        // ==========================
-        // 🎯 TARGET
-        // ==========================
-
         const targetPoints =
           Number(
             order.TARGET || 10
@@ -580,10 +590,6 @@ removePosition(rawSymbol);
           Number(tradePrice) -
 
           targetPoints;
-
-        // ==========================
-        // 💾 SAVE POSITION
-        // ==========================
 
         addPosition(rawSymbol, {
 
@@ -609,10 +615,6 @@ removePosition(rawSymbol);
           time: new Date()
         });
 
-        // ==========================
-        // 📡 SUBSCRIBE
-        // ==========================
-
         const {
           subscribeSymbol
         } = require("./wsService");
@@ -635,10 +637,6 @@ removePosition(rawSymbol);
         );
       }
     }
-
-    // ==============================
-    // 📡 SOCKET UPDATE
-    // ==============================
 
     if (global.io) {
 
@@ -686,19 +684,11 @@ async function exitPosition(position) {
     const token =
       getAccessToken();
 
-    // ==============================
-    // 🔄 REVERSE SIDE
-    // ==============================
-
     const exitSide =
 
       position.side === "BUY"
         ? "SELL"
         : "BUY";
-
-    // ==============================
-    // 📦 EXIT PAYLOAD
-    // ==============================
 
     const exitPayload = {
 
@@ -723,17 +713,14 @@ async function exitPosition(position) {
 
       trigger_price: 0,
 
-      is_amo: false
+      // ✅ AUTO AMO
+      is_amo: !isMarketOpen()
     };
 
     console.log(
       "📡 Exit Payload:",
       exitPayload
     );
-
-    // ==============================
-    // 📤 EXIT API CALL
-    // ==============================
 
     const response =
       await axios.post(
@@ -758,10 +745,6 @@ async function exitPosition(position) {
       "✅ EXIT SUCCESS"
     );
 
-    // ==============================
-    // 📴 UNSUBSCRIBE
-    // ==============================
-
     const {
       unsubscribeSymbol
     } = require("./wsService");
@@ -781,17 +764,17 @@ async function exitPosition(position) {
 
   } catch (err) {
 
-  position.isExiting = false;
+    position.isExiting = false;
 
-  console.log(
+    console.log(
 
-    "❌ Exit Error:",
+      "❌ Exit Error:",
 
-    err.response?.data ||
+      err.response?.data ||
 
-    err.message
-  );
-}
+      err.message
+    );
+  }
 }
 
 // ==============================
