@@ -2,17 +2,23 @@ const WebSocket = require("ws");
 
 const subscribedSymbols = new Set();
 
-const { getAccessToken } = require("./tokenManager");
+const { getAccessToken } =
+  require("./tokenManager");
 
 const {
   positions,
   removePosition
 } = require("./positionCache");
 
-// ⚠️ KEEP SAME
-const { placeOrder } = require("./orderService");
+const {
+  exitPosition
+} = require("./orderService");
 
 let ws;
+
+let reconnectTimer = null;
+
+let heartbeatInterval = null;
 
 // ======================================
 // CONNECT WS
@@ -20,256 +26,438 @@ let ws;
 
 function connectWS() {
 
-  const token = getAccessToken();
+  try {
 
-  ws = new WebSocket(
-    "wss://mlhsm.kotaksecurities.com"
-  );
-
-  // ======================================
-  // WS OPEN
-  // ======================================
-
-  ws.on("open", () => {
-
-    console.log("📡 WS Connected");
-
-    ws.send(JSON.stringify({
-
-      type: "subscribe",
-
-      token: token
-    }));
+    const token =
+      getAccessToken();
 
     // ======================================
-    // RESUBSCRIBE ALL SYMBOLS
+    // CLOSE OLD SOCKET
     // ======================================
 
-    subscribedSymbols.forEach((symbol) => {
+    if (ws) {
+
+      try {
+
+        ws.removeAllListeners();
+
+        ws.terminate();
+
+      } catch (e) {}
+    }
+
+    // CLEAR OLD HEARTBEAT
+
+    if (heartbeatInterval) {
+
+      clearInterval(
+        heartbeatInterval
+      );
+    }
+
+    // ======================================
+    // CREATE WS
+    // ======================================
+
+    ws = new WebSocket(
+      "wss://mlhsm.kotaksecurities.com"
+    );
+
+    // ======================================
+    // OPEN
+    // ======================================
+
+    ws.on("open", () => {
+
+      console.log(
+        "📡 WS Connected"
+      );
+
+      // AUTH
 
       ws.send(JSON.stringify({
 
         type: "subscribe",
 
-        symbol: symbol
+        token: token
       }));
 
-      console.log(
-        "📡 Re-Subscribed:",
-        symbol
+      // ======================================
+      // HEARTBEAT
+      // ======================================
+
+      heartbeatInterval =
+        setInterval(() => {
+
+          try {
+
+            if (
+              ws &&
+              ws.readyState ===
+                WebSocket.OPEN
+            ) {
+
+              ws.ping();
+
+              console.log(
+                "💓 WS Ping"
+              );
+            }
+
+          } catch (err) {
+
+            console.log(
+              "❌ Ping Error:",
+              err.message
+            );
+          }
+
+        }, 15000);
+
+      // ======================================
+      // RESUBSCRIBE ALL
+      // ======================================
+
+      subscribedSymbols.forEach(
+        (symbol) => {
+
+          try {
+
+            ws.send(JSON.stringify({
+
+              type: "subscribe",
+
+              symbol: symbol
+            }));
+
+            console.log(
+              `📡 Re-Subscribed: ${symbol}`
+            );
+
+          } catch (err) {
+
+            console.log(
+              "❌ Re-Subscribe Error:",
+              err.message
+            );
+          }
+        }
       );
     });
-  });
 
-  // ======================================
-  // WS MESSAGE
-  // ======================================
+    // ======================================
+    // MESSAGE
+    // ======================================
 
-  ws.on("message", async (data) => {
+    ws.on("message", async (raw) => {
 
-    try {
+      try {
 
-      const parsed = JSON.parse(data);
+        const parsed =
+          JSON.parse(raw);
 
-      // ======================================
-      // 1. DASHBOARD FEED
-      // ======================================
+        // ======================================
+        // DASHBOARD FEED
+        // ======================================
 
-      if (global.io) {
-        global.io.emit("tick", parsed);
+        if (global.io) {
+
+          global.io.emit(
+            "tick",
+            parsed
+          );
+        }
+
+        // ======================================
+        // SAFE EXTRACTION
+        // ======================================
+
+        const symbol = String(
+
+          parsed.symbol ||
+
+          parsed.ts ||
+
+          parsed.trading_symbol ||
+
+          parsed.TS ||
+
+          ""
+
+        )
+          .replace(/\s+/g, "")
+          .toUpperCase()
+          .trim();
+
+        const ltp = Number(
+
+          parsed.ltp ||
+
+          parsed.lp ||
+
+          parsed.LTP ||
+
+          parsed.price ||
+
+          0
+        );
+
+        // ======================================
+        // INVALID TICK
+        // ======================================
+
+        if (!symbol || !ltp) {
+
+          return;
+        }
+
+        // ======================================
+        // DEBUG TICK
+        // ======================================
+
+        console.log(
+          "📊 TICK:",
+          {
+            symbol,
+            ltp
+          }
+        );
+
+        // ======================================
+        // FIND POSITION
+        // ======================================
+
+        const pos =
+          positions[symbol];
+
+        if (!pos) {
+
+          return;
+        }
+
+        // ======================================
+        // AVOID DUPLICATE EXIT
+        // ======================================
+
+        if (pos.isExiting) {
+
+          return;
+        }
+
+        // ======================================
+        // TARGET CHECK
+        // ======================================
+
+        let hit = false;
+
+        // BUY TARGET
+
+        if (
+
+          pos.side === "BUY" &&
+
+          ltp >=
+            Number(
+              pos.targetPrice
+            )
+
+        ) {
+
+          hit = true;
+        }
+
+        // SELL TARGET
+
+        if (
+
+          pos.side === "SELL" &&
+
+          ltp <=
+            Number(
+              pos.targetPrice
+            )
+
+        ) {
+
+          hit = true;
+        }
+
+        if (!hit) {
+
+          return;
+        }
+
+        // ======================================
+        // LOCK POSITION
+        // ======================================
+
+        pos.isExiting = true;
+
+        console.log(
+          "🎯 TARGET HIT:",
+          {
+
+            symbol,
+
+            ltp,
+
+            target:
+              pos.targetPrice,
+
+            side:
+              pos.side
+          }
+        );
+
+        // ======================================
+        // EXIT POSITION
+        // ======================================
+
+        const result =
+          await exitPosition(pos);
+
+        // ======================================
+        // REMOVE POSITION
+        // ======================================
+
+        removePosition(symbol);
+
+        unsubscribeSymbol(
+          symbol
+        );
+
+        console.log(
+          `✅ POSITION CLOSED: ${symbol}`
+        );
+
+        console.log(
+          "📦 Exit Result:",
+          result
+        );
+
+      } catch (err) {
+
+        console.log(
+          "❌ Tick Parse Error:",
+          err.message
+        );
       }
+    });
 
-      // ======================================
-      // 2. SAFE PARSING
-      // ======================================
+    // ======================================
+    // CLOSE
+    // ======================================
 
-      const symbol = parsed.symbol;
-
-      const ltp = Number(parsed.ltp);
-
-      if (!symbol || !ltp) {
-        return;
-      }
-
-      // ======================================
-      // 3. POSITION CHECK
-      // ======================================
-
-      const pos = positions[symbol];
-
-      if (!pos) {
-        return;
-      }
-
-      // ======================================
-      // 4. AVOID MULTIPLE EXITS
-      // ======================================
-
-      if (pos.isExiting) {
-        return;
-      }
-
-      // ======================================
-      // 5. TARGET CHECK
-      // ======================================
-
-      let hit = false;
-
-      // BUY TARGET
-
-      if (
-        pos.side === "BUY" &&
-        ltp >= pos.targetPrice
-      ) {
-        hit = true;
-      }
-
-      // SELL TARGET
-
-      if (
-        pos.side === "SELL" &&
-        ltp <= pos.targetPrice
-      ) {
-        hit = true;
-      }
-
-      if (!hit) {
-        return;
-      }
-
-      // ======================================
-      // 6. LOCK EXIT
-      // ======================================
-
-      pos.isExiting = true;
-
-      console.log("🎯 TARGET HIT:", {
-
-        symbol,
-
-        ltp,
-
-        target: pos.targetPrice,
-
-        side: pos.side
-      });
-
-      // ======================================
-      // 7. REVERSE SIDE
-      // ======================================
-
-      const exitSide =
-
-        pos.side === "BUY"
-          ? "SELL"
-          : "BUY";
-
-      // ======================================
-      // 8. EXIT ORDER
-      // ======================================
-
-      await placeOrder({
-
-        TS: symbol,
-
-        quantity: pos.quantity,
-
-        transaction_type: exitSide,
-
-        order_type: "MARKET",
-
-        product: "NRML"
-      });
-
-      // ======================================
-      // 9. REMOVE POSITION
-      // ======================================
-
-      removePosition(symbol);
-
-      unsubscribeSymbol(symbol);
+    ws.on("close", () => {
 
       console.log(
-        "✅ POSITION CLOSED:",
-        symbol
+        "🔌 WS Disconnected"
       );
 
-    } catch (err) {
+      // CLEAR HEARTBEAT
 
-      console.error(
-        "WS Parse/Error:",
+      if (heartbeatInterval) {
+
+        clearInterval(
+          heartbeatInterval
+        );
+      }
+
+      // CLEAR OLD TIMER
+
+      if (reconnectTimer) {
+
+        clearTimeout(
+          reconnectTimer
+        );
+      }
+
+      // RECONNECT
+
+      reconnectTimer =
+        setTimeout(() => {
+
+          console.log(
+            "🔄 Reconnecting WS..."
+          );
+
+          connectWS();
+
+        }, 3000);
+    });
+
+    // ======================================
+    // ERROR
+    // ======================================
+
+    ws.on("error", (err) => {
+
+      console.log(
+        "❌ WS Error:",
         err.message
       );
-    }
-  });
+    });
 
-  // ======================================
-  // WS CLOSE
-  // ======================================
-
-  ws.on("close", () => {
+  } catch (err) {
 
     console.log(
-      "🔌 WS Disconnected → reconnecting..."
-    );
-
-    setTimeout(connectWS, 3000);
-  });
-
-  // ======================================
-  // WS ERROR
-  // ======================================
-
-  ws.on("error", (err) => {
-
-    console.error(
-      "WS Error:",
+      "❌ WS Connect Error:",
       err.message
     );
-  });
+  }
 }
 
 // ======================================
-// DYNAMIC SUBSCRIBE
+// SUBSCRIBE
 // ======================================
 
 function subscribeSymbol(symbol) {
 
   try {
 
+    const cleanSymbol =
+      String(symbol)
+        .replace(/\s+/g, "")
+        .toUpperCase()
+        .trim();
+
+    subscribedSymbols.add(
+      cleanSymbol
+    );
+
+    // ======================================
+    // WS NOT READY
+    // ======================================
+
     if (
+
       !ws ||
-      ws.readyState !== WebSocket.OPEN
+
+      ws.readyState !==
+        WebSocket.OPEN
+
     ) {
 
-      console.log("⚠️ WS Not Connected");
-
-      return;
-    }
-
-    if (subscribedSymbols.has(symbol)) {
-
       console.log(
-        "ℹ️ Already subscribed:",
-        symbol
+        "⚠️ WS Not Connected Yet"
       );
 
       return;
     }
 
+    // ======================================
+    // SUBSCRIBE
+    // ======================================
+
     ws.send(JSON.stringify({
 
       type: "subscribe",
 
-      symbol: symbol
-
+      symbol: cleanSymbol
     }));
 
-    subscribedSymbols.add(symbol);
-
     console.log(
-      "📡 Subscribed:",
-      symbol
+      `📡 Subscribed: ${cleanSymbol}`
     );
 
   } catch (err) {
@@ -282,34 +470,52 @@ function subscribeSymbol(symbol) {
 }
 
 // ======================================
-// DYNAMIC UNSUBSCRIBE
+// UNSUBSCRIBE
 // ======================================
 
 function unsubscribeSymbol(symbol) {
 
   try {
 
+    const cleanSymbol =
+      String(symbol)
+        .replace(/\s+/g, "")
+        .toUpperCase()
+        .trim();
+
+    subscribedSymbols.delete(
+      cleanSymbol
+    );
+
+    // ======================================
+    // WS NOT READY
+    // ======================================
+
     if (
+
       !ws ||
-      ws.readyState !== WebSocket.OPEN
+
+      ws.readyState !==
+        WebSocket.OPEN
+
     ) {
 
       return;
     }
 
+    // ======================================
+    // UNSUBSCRIBE
+    // ======================================
+
     ws.send(JSON.stringify({
 
       type: "unsubscribe",
 
-      symbol: symbol
-
+      symbol: cleanSymbol
     }));
 
-    subscribedSymbols.delete(symbol);
-
     console.log(
-      "📴 Unsubscribed:",
-      symbol
+      `📴 Unsubscribed: ${cleanSymbol}`
     );
 
   } catch (err) {
@@ -321,8 +527,15 @@ function unsubscribeSymbol(symbol) {
   }
 }
 
+// ======================================
+// EXPORTS
+// ======================================
+
 module.exports = {
+
   connectWS,
+
   subscribeSymbol,
+
   unsubscribeSymbol
 };

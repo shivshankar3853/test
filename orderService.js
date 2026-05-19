@@ -266,7 +266,7 @@ if (instrumentData) {
       trigger_price: 0,
 
       // ✅ AUTO AMO
-      is_amo: !isMarketOpen()
+      is_amo: false
     };
 
     console.log(
@@ -429,15 +429,16 @@ if (!tradePrice) {
         );
 
         const targetPoints =
-          Number(
-            order.TARGET || 10
-          );
+  Number(order.TARGET || 10);
 
-        const targetPrice =
+let targetPrice =
+  Number(tradePrice) + targetPoints;
 
-          Number(tradePrice) +
+// SAFETY
 
-          targetPoints;
+if (targetPrice <= 0) {
+  targetPrice = Number(tradePrice);
+}
 
         addPosition(rawSymbol, {
 
@@ -581,15 +582,23 @@ if (!tradePrice) {
         });
 
         const targetPoints =
-          Number(
-            order.TARGET || 10
-          );
+  Number(order.TARGET || 10);
 
-        const targetPrice =
+// ======================================
+// SAFE SELL TARGET
+// ======================================
 
-          Number(tradePrice) -
+let targetPrice =
+  Number(tradePrice) - targetPoints;
 
-          targetPoints;
+// NEVER ALLOW NEGATIVE OPTION PRICE
+
+if (targetPrice <= 0) {
+
+  // MINIMUM REALISTIC OPTION VALUE
+
+  targetPrice = 0.05;
+}
 
         addPosition(rawSymbol, {
 
@@ -714,7 +723,7 @@ async function exitPosition(position) {
       trigger_price: 0,
 
       // ✅ AUTO AMO
-      is_amo: !isMarketOpen()
+      is_amo: false
     };
 
     console.log(
