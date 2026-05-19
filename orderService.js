@@ -187,8 +187,8 @@ async function placeOrder(order) {
 
       let targetPrice = tradePrice + targetPoints;
 
-      addPosition(rawSymbol, {
-        symbol: rawSymbol, // ✅ FIXED
+      addPosition(instrumentKey, {
+        symbol: rawSymbol, // ✅ FIXED548296
         instrument: instrumentKey,
         quantity,
         side: "BUY",
@@ -227,7 +227,7 @@ async function placeOrder(order) {
       let targetPrice = tradePrice - targetPoints;
       if (targetPrice <= 0) targetPrice = 0.05;
 
-      addPosition(rawSymbol, {
+      addPosition(instrumentKey, {
         symbol: rawSymbol, // ✅ FIXED
         instrument: instrumentKey,
         quantity,
@@ -241,7 +241,7 @@ async function placeOrder(order) {
 
       const { subscribeSymbol } = require("./wsService");
 
-      subscribeSymbol(rawSymbol); // ✅ FIXED
+      subscribeSymbol(instrumentKey); // ✅ FIXED
 
       console.log("🎯 SELL Position Saved:", {
         symbol: rawSymbol,
@@ -299,9 +299,9 @@ async function exitPosition(position) {
 
     const { unsubscribeSymbol } = require("./wsService");
 
-    unsubscribeSymbol(position.symbol); // ✅ FIXED
+    unsubscribeSymbol(position.instrument);
 
-    removePosition(position.symbol); // ✅ FIXED
+removePosition(position.instrument);
 
     return true;
   } catch (err) {
