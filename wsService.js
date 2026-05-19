@@ -2,8 +2,9 @@ const WebSocket = require("ws");
 
 const subscribedSymbols = new Set();
 
-const { getAccessToken } =
-  require("./tokenManager");
+const {
+  getAccessToken
+} = require("./tokenManager");
 
 const {
   positions,
@@ -46,7 +47,9 @@ function connectWS() {
       } catch (e) {}
     }
 
+    // ======================================
     // CLEAR OLD HEARTBEAT
+    // ======================================
 
     if (heartbeatInterval) {
 
@@ -73,7 +76,9 @@ function connectWS() {
         "📡 WS Connected"
       );
 
+      // ======================================
       // AUTH
+      // ======================================
 
       ws.send(JSON.stringify({
 
@@ -81,6 +86,10 @@ function connectWS() {
 
         token: token
       }));
+
+      console.log(
+        "🔐 WS Auth Sent"
+      );
 
       // ======================================
       // HEARTBEAT
@@ -123,11 +132,15 @@ function connectWS() {
 
           try {
 
+            // ======================================
+            // KOTAK SUBSCRIBE FORMAT
+            // ======================================
+
             ws.send(JSON.stringify({
 
               type: "subscribe",
 
-              symbol: symbol
+              scrips: symbol
             }));
 
             console.log(
@@ -153,8 +166,29 @@ function connectWS() {
 
       try {
 
-        const parsed =
-          JSON.parse(raw);
+        const rawText =
+          raw.toString();
+
+        console.log(
+          "📩 RAW WS:",
+          rawText
+        );
+
+        let parsed;
+
+        try {
+
+          parsed =
+            JSON.parse(rawText);
+
+        } catch {
+
+          console.log(
+            "⚠️ Non JSON WS Message"
+          );
+
+          return;
+        }
 
         // ======================================
         // DASHBOARD FEED
@@ -169,38 +203,212 @@ function connectWS() {
         }
 
         // ======================================
-        // SAFE EXTRACTION
+        // KOTAK FEED FORMAT
         // ======================================
 
-        const symbol = String(
+        if (parsed.feeds) {
 
-          parsed.symbol ||
+          for (const key in parsed.feeds) {
 
-          parsed.ts ||
+            try {
 
-          parsed.trading_symbol ||
+              const feed =
+                parsed.feeds[key];
 
-          parsed.TS ||
+              const ltp =
+                Number(
 
-          ""
+                  feed?.ltpc?.ltp ||
 
-        )
-          .replace(/\s+/g, "")
-          .toUpperCase()
-          .trim();
+                  feed?.ff?.ltpc?.ltp ||
 
-        const ltp = Number(
+                  feed?.ltp ||
 
-          parsed.ltp ||
+                  0
+                );
 
-          parsed.lp ||
+              if (!ltp) {
 
-          parsed.LTP ||
+                continue;
+              }
 
-          parsed.price ||
+              const symbol =
+                String(key)
+                  .replace(/\s+/g, "")
+                  .toUpperCase()
+                  .trim();
 
-          0
-        );
+              // ======================================
+              // DEBUG TICK
+              // ======================================
+
+              console.log(
+                "📊 TICK:",
+                {
+                  symbol,
+                  ltp
+                }
+              );
+
+              // ======================================
+              // FIND POSITION
+              // ======================================
+
+              const pos =
+                positions[symbol];
+
+              if (!pos) {
+
+                continue;
+              }
+
+              // ======================================
+              // AVOID DUPLICATE EXIT
+              // ======================================
+
+              if (pos.isExiting) {
+
+                continue;
+              }
+
+              // ======================================
+              // TARGET CHECK
+              // ======================================
+
+              let hit = false;
+
+              // BUY TARGET
+
+              if (
+
+                pos.side === "BUY" &&
+
+                ltp >=
+                  Number(
+                    pos.targetPrice
+                  )
+
+              ) {
+
+                hit = true;
+              }
+
+              // SELL TARGET
+
+              if (
+
+                pos.side === "SELL" &&
+
+                ltp <=
+                  Number(
+                    pos.targetPrice
+                  )
+
+              ) {
+
+                hit = true;
+              }
+
+              if (!hit) {
+
+                continue;
+              }
+
+              // ======================================
+              // LOCK POSITION
+              // ======================================
+
+              pos.isExiting = true;
+
+              console.log(
+                "🎯 TARGET HIT:",
+                {
+
+                  symbol,
+
+                  ltp,
+
+                  target:
+                    pos.targetPrice,
+
+                  side:
+                    pos.side
+                }
+              );
+
+              // ======================================
+              // EXIT POSITION
+              // ======================================
+
+              const result =
+                await exitPosition(pos);
+
+              // ======================================
+              // REMOVE POSITION
+              // ======================================
+
+              removePosition(symbol);
+
+              unsubscribeSymbol(
+                symbol
+              );
+
+              console.log(
+                `✅ POSITION CLOSED: ${symbol}`
+              );
+
+              console.log(
+                "📦 Exit Result:",
+                result
+              );
+
+            } catch (innerErr) {
+
+              console.log(
+                "❌ Feed Parse Error:",
+                innerErr.message
+              );
+            }
+          }
+
+          return;
+        }
+
+        // ======================================
+        // DIRECT FORMAT FALLBACK
+        // ======================================
+
+        const symbol =
+          String(
+
+            parsed.symbol ||
+
+            parsed.ts ||
+
+            parsed.trading_symbol ||
+
+            parsed.TS ||
+
+            ""
+
+          )
+            .replace(/\s+/g, "")
+            .toUpperCase()
+            .trim();
+
+        const ltp =
+          Number(
+
+            parsed.ltp ||
+
+            parsed.lp ||
+
+            parsed.LTP ||
+
+            parsed.price ||
+
+            0
+          );
 
         // ======================================
         // INVALID TICK
@@ -211,128 +419,12 @@ function connectWS() {
           return;
         }
 
-        // ======================================
-        // DEBUG TICK
-        // ======================================
-
         console.log(
           "📊 TICK:",
           {
             symbol,
             ltp
           }
-        );
-
-        // ======================================
-        // FIND POSITION
-        // ======================================
-
-        const pos =
-          positions[symbol];
-
-        if (!pos) {
-
-          return;
-        }
-
-        // ======================================
-        // AVOID DUPLICATE EXIT
-        // ======================================
-
-        if (pos.isExiting) {
-
-          return;
-        }
-
-        // ======================================
-        // TARGET CHECK
-        // ======================================
-
-        let hit = false;
-
-        // BUY TARGET
-
-        if (
-
-          pos.side === "BUY" &&
-
-          ltp >=
-            Number(
-              pos.targetPrice
-            )
-
-        ) {
-
-          hit = true;
-        }
-
-        // SELL TARGET
-
-        if (
-
-          pos.side === "SELL" &&
-
-          ltp <=
-            Number(
-              pos.targetPrice
-            )
-
-        ) {
-
-          hit = true;
-        }
-
-        if (!hit) {
-
-          return;
-        }
-
-        // ======================================
-        // LOCK POSITION
-        // ======================================
-
-        pos.isExiting = true;
-
-        console.log(
-          "🎯 TARGET HIT:",
-          {
-
-            symbol,
-
-            ltp,
-
-            target:
-              pos.targetPrice,
-
-            side:
-              pos.side
-          }
-        );
-
-        // ======================================
-        // EXIT POSITION
-        // ======================================
-
-        const result =
-          await exitPosition(pos);
-
-        // ======================================
-        // REMOVE POSITION
-        // ======================================
-
-        removePosition(symbol);
-
-        unsubscribeSymbol(
-          symbol
-        );
-
-        console.log(
-          `✅ POSITION CLOSED: ${symbol}`
-        );
-
-        console.log(
-          "📦 Exit Result:",
-          result
         );
 
       } catch (err) {
@@ -354,7 +446,9 @@ function connectWS() {
         "🔌 WS Disconnected"
       );
 
+      // ======================================
       // CLEAR HEARTBEAT
+      // ======================================
 
       if (heartbeatInterval) {
 
@@ -363,7 +457,9 @@ function connectWS() {
         );
       }
 
-      // CLEAR OLD TIMER
+      // ======================================
+      // CLEAR TIMER
+      // ======================================
 
       if (reconnectTimer) {
 
@@ -372,7 +468,9 @@ function connectWS() {
         );
       }
 
+      // ======================================
       // RECONNECT
+      // ======================================
 
       reconnectTimer =
         setTimeout(() => {
@@ -421,6 +519,10 @@ function subscribeSymbol(symbol) {
         .toUpperCase()
         .trim();
 
+    // ======================================
+    // SAVE SUBSCRIPTION
+    // ======================================
+
     subscribedSymbols.add(
       cleanSymbol
     );
@@ -446,14 +548,14 @@ function subscribeSymbol(symbol) {
     }
 
     // ======================================
-    // SUBSCRIBE
+    // KOTAK SUBSCRIBE FORMAT
     // ======================================
 
     ws.send(JSON.stringify({
 
       type: "subscribe",
 
-      symbol: cleanSymbol
+      scrips: cleanSymbol
     }));
 
     console.log(
@@ -483,6 +585,10 @@ function unsubscribeSymbol(symbol) {
         .toUpperCase()
         .trim();
 
+    // ======================================
+    // REMOVE SUBSCRIPTION
+    // ======================================
+
     subscribedSymbols.delete(
       cleanSymbol
     );
@@ -504,14 +610,14 @@ function unsubscribeSymbol(symbol) {
     }
 
     // ======================================
-    // UNSUBSCRIBE
+    // KOTAK UNSUBSCRIBE FORMAT
     // ======================================
 
     ws.send(JSON.stringify({
 
       type: "unsubscribe",
 
-      symbol: cleanSymbol
+      scrips: cleanSymbol
     }));
 
     console.log(
