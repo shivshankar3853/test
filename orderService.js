@@ -388,6 +388,15 @@ async function placeOrder(order) {
     );
 
     // ==============================
+    // TARGET CALCULATION
+    // ==============================
+
+    const targetPoints =
+      Number(
+        order.TARGET || 10
+      );
+
+    // ==============================
     // BUY LOGIC
     // ==============================
 
@@ -418,11 +427,6 @@ async function placeOrder(order) {
         "🟢 BUY Trade Recorded"
       );
 
-      const targetPoints =
-        Number(
-          order.TARGET || 10
-        );
-
       let targetPrice =
         Number(
           tradePrice
@@ -437,7 +441,7 @@ async function placeOrder(order) {
       }
 
       // ==============================
-      // SAVE POSITION USING TOKEN
+      // SAVE POSITION
       // ==============================
 
       addPosition(
@@ -539,11 +543,6 @@ async function placeOrder(order) {
         "🔴 SELL Trade Recorded"
       );
 
-      const targetPoints =
-        Number(
-          order.TARGET || 10
-        );
-
       let targetPrice =
         Number(
           tradePrice
@@ -559,7 +558,7 @@ async function placeOrder(order) {
       }
 
       // ==============================
-      // SAVE POSITION USING TOKEN
+      // SAVE POSITION
       // ==============================
 
       addPosition(
