@@ -34,7 +34,11 @@ async function callback(req, res) {
         }
       }
     );
-
+//===========================
+    if (!response.data.access_token) {
+   throw new Error("Access token missing");
+}
+//===========================
     // Save token
     saveToken({
       ...response.data,
@@ -47,7 +51,11 @@ async function callback(req, res) {
     res.redirect("/dashboard.html");
 
   } catch (err) {
-    console.error("❌ Token Error:", err.response?.data);
+    console.error(
+   "❌ Token Error:",
+   err.response?.data?.errors ||
+   err.message
+);
     res.send("❌ Token generation failed");
   }
 }

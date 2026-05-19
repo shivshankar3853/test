@@ -7,6 +7,7 @@ const { findInstrument } = require("./instrumentStore");
 const { decodeSymbol } = require("./symbolDecoder");
 
 const { addPosition, removePosition } = require("./positionCache");
+const { isPaperTrading } = require("./utils/tradingMode");
 
 // ==============================
 // 🕒 MARKET TIME CHECK
@@ -70,7 +71,9 @@ async function fetchExecutedPrice(orderId, token) {
 
 async function placeOrder(order) {
   try {
-    const token = getAccessToken();
+    const token = isPaperTrading()
+  ? null
+  : getAccessToken();
 
     // ======================
     // VALIDATION
@@ -79,7 +82,7 @@ async function placeOrder(order) {
       .trim()
       .toUpperCase();
 
-    const quantity = parseInt(order.quantity);
+    const quantity = Number(order.quantity);
 
     const rawSymbol = String(order.TS || "")
       .trim()
@@ -97,6 +100,10 @@ async function placeOrder(order) {
     // DECODE
     // ======================
     const decoded = decodeSymbol(rawSymbol);
+
+if (!decoded || !decoded.year) {
+  throw new Error("Invalid symbol format");
+}
 
     const shortYear = decoded.year.toString().slice(-2);
 
@@ -142,33 +149,85 @@ async function placeOrder(order) {
       trigger_price: 0,
       is_amo: false,
     };
+// ======================
+// 📄 PAPER / LIVE ORDER
+// ======================
 
-    const response = await axios.post(
-      "https://api.upstox.com/v2/order/place",
-      orderPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+let orderData;
 
-    const orderData = response.data;
+if (isPaperTrading()) {
 
-    let tradePrice = Number(
-      orderData?.data?.average_price ||
-        orderData?.data?.price ||
-        0
-    );
+  console.log("📄 PAPER TRADE MODE");
 
-    if (!tradePrice) {
-      tradePrice = await fetchExecutedPrice(
-        orderData.data?.order_id,
-        token
-      );
+  const simulatedPrice =
+  Number(order.price) ||
+  Number(order.LTP) ||
+  Math.round(
+    (Math.random() * 100 + 100) * 100
+  ) / 100;
+
+  orderData = {
+    data: {
+      order_id:
+        "PAPER_" + Date.now(),
+
+      average_price:
+        simulatedPrice,
+
+      price:
+        simulatedPrice,
+    },
+  };
+
+} else {
+
+ 
+  // ======================
+  // 🚀 LIVE ORDER
+  // ======================
+if (!isMarketOpen()) {
+  throw new Error(
+    "Market is closed"
+  );
+}
+
+const response = await axios.post(
+    "https://api.upstox.com/v2/order/place",
+    orderPayload,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type":
+          "application/json",
+      },
     }
+  );
 
+  orderData = response.data;
+}
+
+// ======================
+// COMMON FLOW
+// ======================
+
+let tradePrice = Number(
+  orderData?.data?.average_price ||
+  orderData?.data?.price ||
+  0
+);
+
+// fetch actual executed price only in LIVE
+if (
+  !tradePrice &&
+  !isPaperTrading()
+) {
+
+  tradePrice =
+    await fetchExecutedPrice(
+      orderData.data?.order_id,
+      token
+    );
+}
     const targetPoints = Number(order.TARGET || 10);
 
     // ======================
@@ -182,6 +241,7 @@ async function placeOrder(order) {
         orderId: orderData.data?.order_id || "NA",
         price: tradePrice,
         status: "OPEN",
+        mode: process.env.TRADING_MODE,
         time: new Date(),
       });
 
@@ -221,6 +281,7 @@ async function placeOrder(order) {
         orderId: orderData.data?.order_id || "NA",
         price: tradePrice,
         status: "OPEN",
+        mode: process.env.TRADING_MODE,
         time: new Date(),
       });
 
@@ -264,23 +325,62 @@ async function placeOrder(order) {
 // ==============================
 
 async function exitPosition(position) {
+
   try {
+
     if (position.isExiting) return;
 
     position.isExiting = true;
 
+    // ======================
+    // 📄 PAPER EXIT
+    // ======================
+
+    if (isPaperTrading()) {
+
+      console.log(
+        "📄 PAPER EXIT:",
+        position.symbol
+      );
+
+      const { unsubscribeSymbol } =
+        require("./wsService");
+
+      unsubscribeSymbol(
+        position.instrument
+      );
+
+      removePosition(
+        position.instrument
+      );
+
+      return true;
+    }
+
+    // ======================
+    // 🚀 LIVE EXIT
+    // ======================
+
     const token = getAccessToken();
 
-    const exitSide = position.side === "BUY" ? "SELL" : "BUY";
+    const exitSide =
+      position.side === "BUY"
+        ? "SELL"
+        : "BUY";
 
     const exitPayload = {
       quantity: position.quantity,
       product: "D",
       validity: "DAY",
       price: 0,
-      instrument_token: position.instrument,
+      instrument_token:
+        position.instrument,
+
       order_type: "MARKET",
-      transaction_type: exitSide,
+
+      transaction_type:
+        exitSide,
+
       disclosed_quantity: 0,
       trigger_price: 0,
       is_amo: false,
@@ -291,25 +391,39 @@ async function exitPosition(position) {
       exitPayload,
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+          Authorization:
+            `Bearer ${token}`,
+
+          "Content-Type":
+            "application/json",
         },
       }
     );
 
-    const { unsubscribeSymbol } = require("./wsService");
+    const { unsubscribeSymbol } =
+      require("./wsService");
 
-    unsubscribeSymbol(position.instrument);
+    unsubscribeSymbol(
+      position.instrument
+    );
 
-removePosition(position.instrument);
+    removePosition(
+      position.instrument
+    );
 
     return true;
+
   } catch (err) {
+
     position.isExiting = false;
-    console.log("❌ Exit Error:", err.response?.data || err.message);
+
+    console.log(
+      "❌ Exit Error:",
+      err.response?.data ||
+      err.message
+    );
   }
 }
-
 // ==============================
 
 async function getTradeLog() {

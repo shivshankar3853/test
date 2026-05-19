@@ -7,8 +7,7 @@ const {
 } = require("./tokenManager");
 
 const {
-  positions,
-  removePosition
+  positions
 } = require("./positionCache");
 
 const {
@@ -232,12 +231,7 @@ function connectWS() {
                 continue;
               }
 
-              const symbol =
-                String(key)
-                  .replace(/\s+/g, "")
-                  .toUpperCase()
-                  .trim();
-
+              const symbol = String(key).trim();
               // ======================================
               // DEBUG TICK
               // ======================================
@@ -256,6 +250,10 @@ function connectWS() {
 
               const pos =
                 positions[symbol];
+                console.log("📦 Position Check:", {
+  wsSymbol: symbol,
+  hasPosition: !!pos
+});
 
               if (!pos) {
 
@@ -340,18 +338,12 @@ function connectWS() {
               // EXIT POSITION
               // ======================================
 
-              const result =
-                await exitPosition(pos);
+              const result = await exitPosition(pos);
 
               // ======================================
               // REMOVE POSITION
               // ======================================
 
-              removePosition(symbol);
-
-              unsubscribeSymbol(
-                symbol
-              );
 
               console.log(
                 `✅ POSITION CLOSED: ${symbol}`
