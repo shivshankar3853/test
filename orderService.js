@@ -201,7 +201,7 @@ async function placeOrder(order) {
 
       const { subscribeSymbol } = require("./wsService");
 
-      subscribeSymbol(rawSymbol); // ✅ FIXED (IMPORTANT)
+      subscribeSymbol(instrumentKey); // ✅ FIXED (IMPORTANT)
 
       console.log("🎯 BUY Position Saved:", {
         symbol: rawSymbol,
