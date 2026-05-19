@@ -1,77 +1,40 @@
 const axios = require("axios");
 
-const { getAccessToken } =
-  require("./tokenManager");
+const { getAccessToken } = require("./tokenManager");
+const Trade = require("./models/Trade");
 
-const Trade =
-  require("./models/Trade");
+const { findInstrument } = require("./instrumentStore");
+const { decodeSymbol } = require("./symbolDecoder");
 
-const {
-  findInstrument
-} = require("./instrumentStore");
-
-const {
-  decodeSymbol
-} = require("./symbolDecoder");
-
-const {
-  addPosition,
-  removePosition
-} = require("./positionCache");
+const { addPosition, removePosition } = require("./positionCache");
 
 // ==============================
 // 🕒 MARKET TIME CHECK
 // ==============================
 
 function isMarketOpen() {
-
   const now = new Date();
 
   const istTime = new Date(
-    now.toLocaleString(
-      "en-US",
-      {
-        timeZone:
-          "Asia/Kolkata"
-      }
-    )
+    now.toLocaleString("en-US", {
+      timeZone: "Asia/Kolkata",
+    })
   );
 
-  const day =
-    istTime.getDay();
+  const day = istTime.getDay();
+  const hours = istTime.getHours();
+  const minutes = istTime.getMinutes();
 
-  const hours =
-    istTime.getHours();
+  if (day === 0 || day === 6) return false;
 
-  const minutes =
-    istTime.getMinutes();
+  const currentMinutes = hours * 60 + minutes;
 
-  // WEEKEND
-
-  if (
-    day === 0 ||
-    day === 6
-  ) {
-
-    return false;
-  }
-
-  const currentMinutes =
-    hours * 60 + minutes;
-
-  const marketStart =
-    9 * 60 + 15;
-
-  const marketEnd =
-    15 * 60 + 30;
+  const marketStart = 9 * 60 + 15;
+  const marketEnd = 15 * 60 + 30;
 
   return (
-
-    currentMinutes >=
-      marketStart &&
-
-    currentMinutes <=
-      marketEnd
+    currentMinutes >= marketStart &&
+    currentMinutes <= marketEnd
   );
 }
 
@@ -79,53 +42,24 @@ function isMarketOpen() {
 // 💰 FETCH EXECUTED PRICE
 // ==============================
 
-async function fetchExecutedPrice(
-  orderId,
-  token
-) {
-
+async function fetchExecutedPrice(orderId, token) {
   try {
+    await new Promise((r) => setTimeout(r, 1500));
 
-    await new Promise(
-      resolve =>
-        setTimeout(
-          resolve,
-          1500
-        )
+    const response = await axios.get(
+      `https://api.upstox.com/v2/order/details?order_id=${orderId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
     );
 
-    const response =
-      await axios.get(
+    const data = response.data?.data;
 
-        `https://api.upstox.com/v2/order/details?order_id=${orderId}`,
-
-        {
-          headers: {
-
-            Authorization:
-              `Bearer ${token}`
-          }
-        }
-      );
-
-    const data =
-      response.data?.data;
-
-    return Number(
-
-      data?.average_price ||
-
-      data?.price ||
-
-      0
-    );
-
+    return Number(data?.average_price || data?.price || 0);
   } catch (err) {
-
-    console.log(
-      "⚠️ Executed price fetch failed"
-    );
-
+    console.log("⚠️ Executed price fetch failed");
     return 0;
   }
 }
@@ -135,523 +69,192 @@ async function fetchExecutedPrice(
 // ==============================
 
 async function placeOrder(order) {
-
   try {
+    const token = getAccessToken();
 
-    const token =
-      getAccessToken();
-
-    // ==============================
+    // ======================
     // VALIDATION
-    // ==============================
+    // ======================
+    const action = String(order.transaction_type || "")
+      .trim()
+      .toUpperCase();
 
-    const action =
-      String(
-        order.transaction_type || ""
-      )
-        .trim()
-        .toUpperCase();
+    const quantity = parseInt(order.quantity);
 
-    const quantity =
-      parseInt(
-        order.quantity
-      );
+    const rawSymbol = String(order.TS || "")
+      .trim()
+      .toUpperCase();
 
-    const rawSymbol =
-      String(
-        order.TS || ""
-      )
-        .trim()
-        .toUpperCase();
+    if (!["BUY", "SELL"].includes(action))
+      throw new Error("Invalid Action");
 
-    if (
-      !["BUY", "SELL"]
-        .includes(action)
-    ) {
+    if (!rawSymbol) throw new Error("Symbol missing");
 
-      throw new Error(
-        "Invalid Action"
-      );
-    }
+    if (!quantity || quantity <= 0)
+      throw new Error("Invalid quantity");
 
-    if (!rawSymbol) {
+    // ======================
+    // DECODE
+    // ======================
+    const decoded = decodeSymbol(rawSymbol);
 
-      throw new Error(
-        "Symbol missing"
-      );
-    }
-
-    if (
-      !quantity ||
-      quantity <= 0
-    ) {
-
-      throw new Error(
-        "Invalid quantity"
-      );
-    }
-
-    // ==============================
-    // DECODE SYMBOL
-    // ==============================
-
-    const decoded =
-      decodeSymbol(
-        rawSymbol
-      );
-
-    console.log(
-      "🧠 Decoded:",
-      decoded
-    );
-
-    const shortYear =
-      decoded.year
-        .toString()
-        .slice(-2);
-
-    // ==============================
-    // FIND INSTRUMENT
-    // ==============================
+    const shortYear = decoded.year.toString().slice(-2);
 
     const formats = [
-
       `${decoded.index} ${decoded.strike} ${decoded.type} ${decoded.day} ${decoded.month} ${shortYear}`,
-
-      `${decoded.index} ${decoded.day} ${decoded.month} ${shortYear} ${decoded.type} ${decoded.strike}`
+      `${decoded.index} ${decoded.day} ${decoded.month} ${shortYear} ${decoded.type} ${decoded.strike}`,
     ];
 
-    let instrumentKey =
-      null;
+    let instrumentKey = null;
 
     for (const f of formats) {
-
-      console.log(
-        "🔍 Trying:",
-        f
-      );
-
-      const instrumentData =
-        findInstrument(f);
+      const instrumentData = findInstrument(f);
 
       if (instrumentData) {
+        instrumentKey = instrumentData.token;
 
-        instrumentKey =
-          instrumentData.token;
+        const lotSize = Number(instrumentData.lotSize || 1);
 
-        const lotSize =
-          Number(
-            instrumentData.lotSize || 1
-          );
-
-        if (
-          quantity % lotSize !== 0
-        ) {
-
-          throw new Error(
-            `Invalid quantity. Lot size = ${lotSize}`
-          );
+        if (quantity % lotSize !== 0) {
+          throw new Error(`Invalid quantity. Lot size = ${lotSize}`);
         }
-
-        console.log(
-          "✅ Lot Size Validated:",
-          lotSize
-        );
-
-        console.log(
-          "🎯 Matched:",
-          f
-        );
 
         break;
       }
     }
 
     if (!instrumentKey) {
-
-      throw new Error(
-        "Instrument not found for: " +
-          rawSymbol
-      );
+      throw new Error("Instrument not found for: " + rawSymbol);
     }
 
-    console.log(
-      "🎯 Final Mapping:",
-      rawSymbol,
-      "→",
-      instrumentKey
-    );
-
-    // ==============================
+    // ======================
     // ORDER PAYLOAD
-    // ==============================
-
+    // ======================
     const orderPayload = {
-
       quantity,
-
-      product:
-        order.product === "NRML"
-          ? "D"
-          : "I",
-
-      validity:
-        order.validity ||
-        "DAY",
-
+      product: order.product === "NRML" ? "D" : "I",
+      validity: order.validity || "DAY",
       price: 0,
-
-      instrument_token:
-        instrumentKey,
-
-      order_type:
-        order.order_type ||
-        "MARKET",
-
-      transaction_type:
-        action,
-
+      instrument_token: instrumentKey,
+      order_type: order.order_type || "MARKET",
+      transaction_type: action,
       disclosed_quantity: 0,
-
       trigger_price: 0,
-
-      is_amo: false
+      is_amo: false,
     };
 
-    console.log(
-      "📡 Sending Order:",
-      orderPayload
+    const response = await axios.post(
+      "https://api.upstox.com/v2/order/place",
+      orderPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
 
-    // ==============================
-    // PLACE ORDER
-    // ==============================
+    const orderData = response.data;
 
-    const response =
-      await axios.post(
-
-        "https://api.upstox.com/v2/order/place",
-
-        orderPayload,
-
-        {
-          headers: {
-
-            Authorization:
-              `Bearer ${token}`,
-
-            "Content-Type":
-              "application/json"
-          }
-        }
-      );
-
-    const orderData =
-      response.data;
-
-    console.log(
-      "✅ Order Success:",
-      orderData
-    );
-
-    // ==============================
-    // FETCH EXECUTED PRICE
-    // ==============================
-
-    let tradePrice =
-      Number(
-
-        orderData?.data
-          ?.average_price ||
-
-        orderData?.data
-          ?.price ||
-
+    let tradePrice = Number(
+      orderData?.data?.average_price ||
+        orderData?.data?.price ||
         0
-      );
+    );
 
     if (!tradePrice) {
-
-      tradePrice =
-        await fetchExecutedPrice(
-
-          orderData.data
-            ?.order_id,
-
-          token
-        );
+      tradePrice = await fetchExecutedPrice(
+        orderData.data?.order_id,
+        token
+      );
     }
 
-    console.log(
-      "💰 Executed Price:",
-      tradePrice
-    );
+    const targetPoints = Number(order.TARGET || 10);
 
-    // ==============================
-    // TARGET CALCULATION
-    // ==============================
-
-    const targetPoints =
-      Number(
-        order.TARGET || 10
-      );
-
-    // ==============================
-    // BUY LOGIC
-    // ==============================
-
+    // ======================
+    // BUY
+    // ======================
     if (action === "BUY") {
-
       await Trade.create({
-
         side: "BUY",
-
         quantity,
-
-        instrument:
-          instrumentKey,
-
-        orderId:
-          orderData.data
-            ?.order_id || "NA",
-
-        price:
-          tradePrice,
-
+        instrument: instrumentKey,
+        orderId: orderData.data?.order_id || "NA",
+        price: tradePrice,
         status: "OPEN",
-
-        time: new Date()
+        time: new Date(),
       });
 
-      console.log(
-        "🟢 BUY Trade Recorded"
-      );
+      let targetPrice = tradePrice + targetPoints;
 
-      let targetPrice =
-        Number(
-          tradePrice
-        ) + targetPoints;
+      addPosition(rawSymbol, {
+        symbol: rawSymbol, // ✅ FIXED
+        instrument: instrumentKey,
+        quantity,
+        side: "BUY",
+        entryPrice: tradePrice,
+        targetPrice,
+        orderId: orderData.data?.order_id,
+        isExiting: false,
+        time: new Date(),
+      });
 
-      if (targetPrice <= 0) {
+      const { subscribeSymbol } = require("./wsService");
 
-        targetPrice =
-          Number(
-            tradePrice
-          );
-      }
+      subscribeSymbol(rawSymbol); // ✅ FIXED (IMPORTANT)
 
-      // ==============================
-      // SAVE POSITION
-      // ==============================
-
-      addPosition(
-        instrumentKey,
-        {
-
-          symbol:
-            instrumentKey,
-
-          tradingSymbol:
-            rawSymbol,
-
-          instrument:
-            instrumentKey,
-
-          quantity,
-
-          side: "BUY",
-
-          entryPrice:
-            Number(
-              tradePrice
-            ),
-
-          targetPrice,
-
-          orderId:
-            orderData.data
-              ?.order_id,
-
-          isExiting: false,
-
-          time: new Date()
-        }
-      );
-
-      const {
-        subscribeSymbol
-      } = require(
-        "./wsService"
-      );
-
-      // ==============================
-      // SUBSCRIBE TOKEN
-      // ==============================
-
-      subscribeSymbol(
-        instrumentKey
-      );
-
-      console.log(
-        "🎯 BUY Position Saved:",
-        {
-
-          symbol:
-            instrumentKey,
-
-          tradingSymbol:
-            rawSymbol,
-
-          entryPrice:
-            tradePrice,
-
-          targetPrice
-        }
-      );
+      console.log("🎯 BUY Position Saved:", {
+        symbol: rawSymbol,
+        entryPrice: tradePrice,
+        targetPrice,
+      });
     }
 
-    // ==============================
-    // SELL LOGIC
-    // ==============================
-
-    else if (
-      action === "SELL"
-    ) {
-
+    // ======================
+    // SELL
+    // ======================
+    else if (action === "SELL") {
       await Trade.create({
-
         side: "SELL",
-
         quantity,
-
-        instrument:
-          instrumentKey,
-
-        orderId:
-          orderData.data
-            ?.order_id || "NA",
-
-        price:
-          tradePrice,
-
+        instrument: instrumentKey,
+        orderId: orderData.data?.order_id || "NA",
+        price: tradePrice,
         status: "OPEN",
-
-        time: new Date()
+        time: new Date(),
       });
 
-      console.log(
-        "🔴 SELL Trade Recorded"
-      );
+      let targetPrice = tradePrice - targetPoints;
+      if (targetPrice <= 0) targetPrice = 0.05;
 
-      let targetPrice =
-        Number(
-          tradePrice
-        ) - targetPoints;
+      addPosition(rawSymbol, {
+        symbol: rawSymbol, // ✅ FIXED
+        instrument: instrumentKey,
+        quantity,
+        side: "SELL",
+        entryPrice: tradePrice,
+        targetPrice,
+        orderId: orderData.data?.order_id,
+        isExiting: false,
+        time: new Date(),
+      });
 
-      // NEVER NEGATIVE
+      const { subscribeSymbol } = require("./wsService");
 
-      if (
-        targetPrice <= 0
-      ) {
+      subscribeSymbol(rawSymbol); // ✅ FIXED
 
-        targetPrice = 0.05;
-      }
-
-      // ==============================
-      // SAVE POSITION
-      // ==============================
-
-      addPosition(
-        instrumentKey,
-        {
-
-          symbol:
-            instrumentKey,
-
-          tradingSymbol:
-            rawSymbol,
-
-          instrument:
-            instrumentKey,
-
-          quantity,
-
-          side: "SELL",
-
-          entryPrice:
-            Number(
-              tradePrice
-            ),
-
-          targetPrice,
-
-          orderId:
-            orderData.data
-              ?.order_id,
-
-          isExiting: false,
-
-          time: new Date()
-        }
-      );
-
-      const {
-        subscribeSymbol
-      } = require(
-        "./wsService"
-      );
-
-      // ==============================
-      // SUBSCRIBE TOKEN
-      // ==============================
-
-      subscribeSymbol(
-        instrumentKey
-      );
-
-      console.log(
-        "🎯 SELL Position Saved:",
-        {
-
-          symbol:
-            instrumentKey,
-
-          tradingSymbol:
-            rawSymbol,
-
-          entryPrice:
-            tradePrice,
-
-          targetPrice
-        }
-      );
+      console.log("🎯 SELL Position Saved:", {
+        symbol: rawSymbol,
+        entryPrice: tradePrice,
+        targetPrice,
+      });
     }
 
-    // ==============================
-    // SOCKET EVENT
-    // ==============================
-
-    if (global.io) {
-
-      global.io.emit(
-        "order",
-        orderData
-      );
-    }
+    if (global.io) global.io.emit("order", orderData);
 
     return orderData;
-
   } catch (err) {
-
-    console.log(
-
-      "❌ Order Error:",
-
-      err.response?.data ||
-
-      err.message
-    );
-
+    console.log("❌ Order Error:", err.response?.data || err.message);
     throw err;
   }
 }
@@ -660,145 +263,61 @@ async function placeOrder(order) {
 // 🚪 EXIT POSITION
 // ==============================
 
-async function exitPosition(
-  position
-) {
-
+async function exitPosition(position) {
   try {
-
-    if (
-      position.isExiting
-    ) {
-
-      return;
-    }
+    if (position.isExiting) return;
 
     position.isExiting = true;
 
-    console.log(
-      `🚀 EXITING ${position.symbol}`
-    );
+    const token = getAccessToken();
 
-    const token =
-      getAccessToken();
-
-    const exitSide =
-
-      position.side === "BUY"
-        ? "SELL"
-        : "BUY";
+    const exitSide = position.side === "BUY" ? "SELL" : "BUY";
 
     const exitPayload = {
-
-      quantity:
-        position.quantity,
-
+      quantity: position.quantity,
       product: "D",
-
       validity: "DAY",
-
       price: 0,
-
-      instrument_token:
-        position.instrument,
-
-      order_type:
-        "MARKET",
-
-      transaction_type:
-        exitSide,
-
+      instrument_token: position.instrument,
+      order_type: "MARKET",
+      transaction_type: exitSide,
       disclosed_quantity: 0,
-
       trigger_price: 0,
-
-      is_amo: false
+      is_amo: false,
     };
 
-    console.log(
-      "📡 Exit Payload:",
-      exitPayload
+    await axios.post(
+      "https://api.upstox.com/v2/order/place",
+      exitPayload,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
     );
 
-    const response =
-      await axios.post(
+    const { unsubscribeSymbol } = require("./wsService");
 
-        "https://api.upstox.com/v2/order/place",
+    unsubscribeSymbol(position.symbol); // ✅ FIXED
 
-        exitPayload,
+    removePosition(position.symbol); // ✅ FIXED
 
-        {
-          headers: {
-
-            Authorization:
-              `Bearer ${token}`,
-
-            "Content-Type":
-              "application/json"
-          }
-        }
-      );
-
-    console.log(
-      "✅ EXIT SUCCESS"
-    );
-
-    const {
-      unsubscribeSymbol
-    } = require(
-      "./wsService"
-    );
-
-    unsubscribeSymbol(
-      position.instrument
-    );
-
-    removePosition(
-      position.instrument
-    );
-
-    console.log(
-      "📴 Unsubscribed:",
-      position.instrument
-    );
-
-    return response.data;
-
+    return true;
   } catch (err) {
-
-    position.isExiting =
-      false;
-
-    console.log(
-
-      "❌ Exit Error:",
-
-      err.response?.data ||
-
-      err.message
-    );
+    position.isExiting = false;
+    console.log("❌ Exit Error:", err.response?.data || err.message);
   }
 }
 
 // ==============================
-// 📊 TRADE LOG
-// ==============================
 
 async function getTradeLog() {
-
-  return await Trade.find()
-    .sort({
-      time: -1
-    });
+  return await Trade.find().sort({ time: -1 });
 }
 
-// ==============================
-
 module.exports = {
-
   placeOrder,
-
   exitPosition,
-
-  getTradeLog
+  getTradeLog,
 };
