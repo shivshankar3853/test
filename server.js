@@ -615,9 +615,11 @@ io.on("connection", (socket) => {
 // START SERVER
 // =================================
 
-server.listen(3000, () => {
+const PORT = Number(process.env.PORT || 4000);
+
+server.listen(PORT, () => {
 
   console.log(
-    "🚀 Server running on port 3000"
+    `🚀 Server running on port ${PORT}`
   );
 });
