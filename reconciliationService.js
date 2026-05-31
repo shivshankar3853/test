@@ -25,6 +25,7 @@ function isAcceptedStatus(status) {
     "OPEN",
     "TRIGGER PENDING",
     "COMPLETE",
+    "AMO REQ RECEIVED",
     "PUT ORDER REQ RECEIVED",
     "VALIDATION PENDING",
     "OPEN PENDING",

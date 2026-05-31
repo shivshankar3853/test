@@ -42,6 +42,8 @@ function normalizeSignalPayload(signal = {}) {
 function convertTV(signal) {
   try {
     const normalized = normalizeSignalPayload(signal);
+    const needsMarketProtection =
+      normalized.OT === "MARKET" || normalized.OT === "SL-M";
 
     if (!normalized.TS || !normalized.TT) {
       return null;
@@ -68,7 +70,9 @@ function convertTV(signal) {
       disclosed_quantity: normalized.disclosed_quantity || 0,
       market_protection: Number.isFinite(normalized.market_protection)
         ? normalized.market_protection
-        : undefined,
+        : needsMarketProtection
+          ? -1
+          : undefined,
       variety: normalized.variety || "regular",
       AT: normalized.AT || "ZERODHA",
       broker: normalized.AT || "ZERODHA",
