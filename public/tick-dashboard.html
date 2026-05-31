@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tick Dashboard</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #020617;
+      --panel: #0f172a;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --accent: #38bdf8;
+      --success: #22c55e;
+      --danger: #f87171;
+      --warning: #f59e0b;
+    }
+
+    body {
+      margin: 0;
+      font-family: Inter, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #020617, #0f172a);
+      color: #e2e8f0;
+    }
+
+    header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #03111f;
+    }
+
+    .primary { background: #67e8f9; }
+    .secondary { background: #cbd5e1; }
+    .danger { background: #fca5a5; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.5fr 1fr;
+      gap: 18px;
+      padding: 18px;
+    }
+
+    .panel {
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.35);
+    }
+
+    .panel h2 {
+      margin-top: 0;
+      margin-bottom: 12px;
+      font-size: 18px;
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .metric {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px;
+    }
+
+    .metric label {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+
+    .metric strong {
+      font-size: 22px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--border);
+      padding: 10px 8px;
+      text-align: left;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    tbody tr:hover {
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .open { background: rgba(34, 197, 94, 0.18); color: #86efac; }
+    .closed { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
+
+    .code-block {
+      background: #020617;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      color: #cbd5e1;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      min-height: 120px;
+      max-height: 220px;
+      overflow: auto;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .mini-card {
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+
+    .mini-card label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .mini-card strong {
+      font-size: 20px;
+    }
+
+    .footer-note {
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 20px 20px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .status-row,
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>📈 Tick Dashboard</h1>
+      <div class="subtitle">Test TradingView signals, inspect live ticks, and reconcile broker orders.</div>
+    </div>
+
+    <div class="toolbar">
+      <button class="primary" id="sendSignalBtn">Send Test Signal</button>
+      <button class="secondary" id="reconcileBtn">Reconcile Open Trades</button>
+      <button class="secondary" id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+
+  <section class="layout">
+    <div class="panel">
+      <h2>📡 Live Ticks</h2>
+      <div class="status-row">
+        <div class="metric">
+          <label>Latest Tick</label>
+          <strong id="latestTick">0</strong>
+        </div>
+        <div class="metric">
+          <label>Tick Count</label>
+          <strong id="tickCount">0</strong>
+        </div>
+        <div class="metric">
+          <label>Open Trades</label>
+          <strong id="openTradeCount">0</strong>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>LTP</th>
+            <th>Highest</th>
+            <th>Lowest</th>
+          </tr>
+        </thead>
+        <tbody id="ticksBody"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>🧪 Test Signal & Reconciliation</h2>
+      <div class="code-block" id="signalPreview"></div>
+      <div class="grid-2">
+        <div class="mini-card">
+          <label>Last Test Result</label>
+          <strong id="testStatus">Idle</strong>
+        </div>
+        <div class="mini-card">
+          <label>Last Reconcile Result</label>
+          <strong id="reconcileStatus">Idle</strong>
+        </div>
+      </div>
+      <div class="code-block" id="reconcilePreview" style="margin-top: 12px; min-height: 140px;"></div>
+
+      <h2 style="margin-top: 18px;">📘 Open Trades</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Qty</th>
+            <th>Target</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tradesBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="footer-note">Tip: use the test signal payload to simulate a TradingView entry and then watch the tick stream update automatically.</div>
+
+  <script>
+    const defaultSignal = {
+      TS: "NIFTY 23000 CE 02 JUN 26",
+      Q: 1,
+      TT: "BUY",
+      OT: "MARKET",
+      P: "NRML",
+      VL: "DAY",
+      LTP: 100,
+      TARGET: 105,
+      source: "test",
+      strategy: "tick-dashboard"
+    };
+
+    const signalPreview = document.getElementById("signalPreview");
+    const reconcilePreview = document.getElementById("reconcilePreview");
+    const ticksBody = document.getElementById("ticksBody");
+    const tradesBody = document.getElementById("tradesBody");
+    const latestTick = document.getElementById("latestTick");
+    const tickCount = document.getElementById("tickCount");
+    const openTradeCount = document.getElementById("openTradeCount");
+    const testStatus = document.getElementById("testStatus");
+    const reconcileStatus = document.getElementById("reconcileStatus");
+
+    signalPreview.textContent = JSON.stringify(defaultSignal, null, 2);
+
+    async function loadTicks() {
+      const res = await fetch("/ticks");
+      const ticks = await res.json();
+
+      ticksBody.innerHTML = "";
+
+      if (!ticks.length) {
+        ticksBody.innerHTML = `<tr><td colspan="6">No ticks found yet.</td></tr>`;
+        latestTick.textContent = "0";
+        tickCount.textContent = "0";
+        return;
+      }
+
+      const latest = ticks[0];
+      latestTick.textContent = Number(latest.ltp || 0).toFixed(2);
+      tickCount.textContent = ticks.length;
+
+      ticks.slice(0, 50).forEach((tick) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${new Date(tick.timestamp).toLocaleTimeString()}</td>
+          <td>${tick.symbol || "-"}</td>
+          <td>${tick.side || "-"}</td>
+          <td>${Number(tick.ltp || 0).toFixed(2)}</td>
+          <td>${Number(tick.highestLtp || 0).toFixed(2)}</td>
+          <td>${Number(tick.lowestLtp || 0).toFixed(2)}</td>
+        `;
+        ticksBody.appendChild(row);
+      });
+    }
+
+    async function loadTrades() {
+      const res = await fetch("/trades");
+      const trades = await res.json();
+      const openTrades = trades.filter((trade) => trade.status === "OPEN");
+
+      openTradeCount.textContent = openTrades.length;
+      tradesBody.innerHTML = "";
+
+      if (!openTrades.length) {
+        tradesBody.innerHTML = `<tr><td colspan="5">No open trades.</td></tr>`;
+        return;
+      }
+
+      openTrades.slice(0, 50).forEach((trade) => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${trade.symbol || trade.instrument || "-"}</td>
+          <td>${trade.side || "-"}</td>
+          <td>${trade.quantity || 0}</td>
+          <td>${Number(trade.targetPrice || 0).toFixed(2)}</td>
+          <td><span class="pill open">OPEN</span></td>
+        `;
+        tradesBody.appendChild(row);
+      });
+    }
+
+    async function sendTestSignal() {
+      testStatus.textContent = "Sending...";
+      const response = await fetch("/test-signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(defaultSignal)
+      });
+      const payload = await response.text();
+      testStatus.textContent = response.ok ? "Success" : `Failed: ${response.status}`;
+      reconcilePreview.textContent = payload;
+      await loadTicks();
+      await loadTrades();
+    }
+
+    async function reconcileOpenTrades() {
+      reconcileStatus.textContent = "Reconciling...";
+      const response = await fetch("/reconcile", { method: "POST" });
+      const data = await response.json();
+      reconcileStatus.textContent = response.ok ? "Complete" : `Failed: ${response.status}`;
+      reconcilePreview.textContent = JSON.stringify(data, null, 2);
+      await loadTrades();
+    }
+
+    document.getElementById("sendSignalBtn").addEventListener("click", sendTestSignal);
+    document.getElementById("reconcileBtn").addEventListener("click", reconcileOpenTrades);
+    document.getElementById("refreshBtn").addEventListener("click", async () => {
+      await loadTicks();
+      await loadTrades();
+    });
+
+    setInterval(() => {
+      loadTicks();
+      loadTrades();
+    }, 3000);
+
+    loadTicks();
+    loadTrades();
+  </script>
+</body>
+</html>

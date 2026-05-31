@@ -3,57 +3,60 @@ const Trade = require("./models/Trade");
 const { addPosition } = require("./positionCache");
 const { subscribeSymbol } = require("./wsService");
 
-// ======================================
-// RECOVER OPEN POSITIONS (FIXED)
-// ======================================
+function resolveRecoveredTargetPrice(trade) {
+  const entryPrice = Number(trade.price || 0);
+  const savedTarget = Number(trade.targetPrice || 0);
+
+  if (savedTarget > 0) {
+    return savedTarget;
+  }
+
+  const defaultPoints = 10;
+
+  if (trade.side === "BUY") {
+    return entryPrice + defaultPoints;
+  }
+
+  return Math.max(entryPrice - defaultPoints, 0.05);
+}
 
 async function recoverPositions() {
   try {
     console.log("♻️ Recovering Positions...");
 
     const openTrades = await Trade.find({ status: "OPEN" });
-
     const subscribed = new Set();
 
     for (const trade of openTrades) {
       if (!trade.instrument) {
-        console.log("⚠️ Skipping trade (no instrument):", trade);
+        console.log("⚠️ Skipping trade (no instrument):", trade?._id);
         continue;
       }
 
-      const targetPoints = 10;
+      const targetPrice = resolveRecoveredTargetPrice(trade);
 
-      let targetPrice =
-        trade.side === "BUY"
-          ? Number(trade.price) + targetPoints
-          : Number(trade.price) - targetPoints;
-
-      if (targetPrice <= 0) targetPrice = 0.05;
-
-      // ==============================
-      // STORE POSITION USING instrumentKey
-      // ==============================
       addPosition(trade.instrument, {
-        ts: trade.symbol || trade.instrument,   // fallback safety
         symbol: trade.symbol || trade.instrument,
+        ts: trade.symbol || trade.instrument,
         instrument: trade.instrument,
         quantity: trade.quantity,
         side: trade.side,
         entryPrice: trade.price,
         targetPrice,
         orderId: trade.orderId,
+        tradeId: String(trade._id),
         isExiting: false,
         recovered: true,
         time: trade.time,
+        lastLtp: Number(trade.price || 0),
+        highestLtp: Number(trade.price || 0),
+        lowestLtp: Number(trade.price || 0),
+        tickCount: 0
       });
 
-      // ==============================
-      // SUBSCRIBE ONLY ONCE PER TOKEN
-      // ==============================
       if (!subscribed.has(trade.instrument)) {
         subscribeSymbol(trade.instrument);
         subscribed.add(trade.instrument);
-
         console.log("♻️ Re-Subscribed:", trade.instrument);
       }
     }

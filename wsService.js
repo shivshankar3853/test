@@ -2,12 +2,15 @@ const WebSocket = require("ws");
 
 const subscribedSymbols = new Set();
 
+const Tick = require("./models/Tick");
+
 const {
   getAccessToken
 } = require("./tokenManager");
 
 const {
-  positions
+  getAllPositions,
+  getPosition
 } = require("./positionCache");
 
 const {
@@ -19,6 +22,119 @@ let ws;
 let reconnectTimer = null;
 
 let heartbeatInterval = null;
+
+function normalizeFeedKey(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function resolvePosition(symbol) {
+  const normalized = normalizeFeedKey(symbol);
+
+  const direct = getPosition(normalized);
+
+  if (direct) {
+    return direct;
+  }
+
+  const allPositions = getAllPositions();
+
+  for (const key in allPositions) {
+    const candidate = allPositions[key];
+
+    if (
+      normalizeFeedKey(candidate?.symbol) === normalized ||
+      normalizeFeedKey(candidate?.ts) === normalized
+    ) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+async function persistTick(position, ltp, metadata = {}) {
+  try {
+    if (!position || !Number.isFinite(ltp) || ltp <= 0) {
+      return;
+    }
+
+    const nextTickCount = Number(position.tickCount || 0) + 1;
+
+    position.lastLtp = ltp;
+    position.highestLtp = Math.max(Number(position.highestLtp || 0), ltp);
+    position.lowestLtp = position.lowestLtp
+      ? Math.min(Number(position.lowestLtp), ltp)
+      : ltp;
+    position.tickCount = nextTickCount;
+
+    await Tick.create({
+      tradeId: position.tradeId || null,
+      symbol: position.symbol || position.ts || position.instrument,
+      instrument: position.instrument,
+      ltp,
+      source: metadata.source || "ws",
+      rawKey: metadata.rawKey || "",
+      tickCount: nextTickCount,
+      highestLtp: position.highestLtp,
+      lowestLtp: position.lowestLtp,
+      side: position.side,
+      session: metadata.session || "LIVE",
+    });
+  } catch (err) {
+    console.log("⚠️ Tick persistence failed:", err.message);
+  }
+}
+
+async function handleTick(symbol, ltp, metadata = {}) {
+  const normalizedSymbol = normalizeFeedKey(symbol);
+  const position = resolvePosition(normalizedSymbol);
+
+  if (!position) {
+    return;
+  }
+
+  console.log("📊 TICK:", {
+    symbol: normalizedSymbol,
+    ltp,
+  });
+
+  await persistTick(position, ltp, {
+    ...metadata,
+    rawKey: metadata.rawKey || normalizedSymbol,
+  });
+
+  if (position.isExiting || !Number(position.targetPrice)) {
+    return;
+  }
+
+  const targetPrice = Number(position.targetPrice);
+
+  const hit =
+    position.side === "BUY"
+      ? ltp >= targetPrice
+      : ltp <= targetPrice;
+
+  if (!hit) {
+    return;
+  }
+
+  position.isExiting = true;
+
+  console.log("🎯 TARGET HIT:", {
+    symbol: normalizedSymbol,
+    ltp,
+    target: targetPrice,
+    side: position.side,
+  });
+
+  const result = await exitPosition(position);
+
+  console.log(`✅ POSITION CLOSED: ${normalizedSymbol}`);
+  console.log("📦 Exit Result:", result);
+}
 
 // ======================================
 // CONNECT WS
@@ -211,155 +327,24 @@ function connectWS() {
 
             try {
 
-              const feed =
-                parsed.feeds[key];
-
-              const ltp =
-                Number(
-
-                  feed?.ltpc?.ltp ||
-
-                  feed?.ff?.ltpc?.ltp ||
-
-                  feed?.ltp ||
-
-                  0
-                );
+              const feed = parsed.feeds[key];
+              const ltp = Number(
+                feed?.ltpc?.ltp ||
+                feed?.ff?.ltpc?.ltp ||
+                feed?.ltp ||
+                0
+              );
 
               if (!ltp) {
-
                 continue;
               }
 
-              const symbol = String(key).trim();
-              // ======================================
-              // DEBUG TICK
-              // ======================================
-
-              console.log(
-                "📊 TICK:",
-                {
-                  symbol,
-                  ltp
-                }
-              );
-
-              // ======================================
-              // FIND POSITION
-              // ======================================
-
-              const pos =
-                positions[symbol];
-                console.log("📦 Position Check:", {
-  wsSymbol: symbol,
-  hasPosition: !!pos
-});
-
-              if (!pos) {
-
-                continue;
-              }
-
-              // ======================================
-              // AVOID DUPLICATE EXIT
-              // ======================================
-
-              if (pos.isExiting) {
-
-                continue;
-              }
-
-              // ======================================
-              // TARGET CHECK
-              // ======================================
-
-              let hit = false;
-
-              // BUY TARGET
-
-              if (
-
-                pos.side === "BUY" &&
-
-                ltp >=
-                  Number(
-                    pos.targetPrice
-                  )
-
-              ) {
-
-                hit = true;
-              }
-
-              // SELL TARGET
-
-              if (
-
-                pos.side === "SELL" &&
-
-                ltp <=
-                  Number(
-                    pos.targetPrice
-                  )
-
-              ) {
-
-                hit = true;
-              }
-
-              if (!hit) {
-
-                continue;
-              }
-
-              // ======================================
-              // LOCK POSITION
-              // ======================================
-
-              pos.isExiting = true;
-
-              console.log(
-                "🎯 TARGET HIT:",
-                {
-
-                  symbol,
-
-                  ltp,
-
-                  target:
-                    pos.targetPrice,
-
-                  side:
-                    pos.side
-                }
-              );
-
-              // ======================================
-              // EXIT POSITION
-              // ======================================
-
-              const result = await exitPosition(pos);
-
-              // ======================================
-              // REMOVE POSITION
-              // ======================================
-
-
-              console.log(
-                `✅ POSITION CLOSED: ${symbol}`
-              );
-
-              console.log(
-                "📦 Exit Result:",
-                result
-              );
-
+              await handleTick(key, ltp, {
+                source: "ws",
+                rawKey: key,
+              });
             } catch (innerErr) {
-
-              console.log(
-                "❌ Feed Parse Error:",
-                innerErr.message
-              );
+              console.log("❌ Feed Parse Error:", innerErr.message);
             }
           }
 
@@ -370,54 +355,33 @@ function connectWS() {
         // DIRECT FORMAT FALLBACK
         // ======================================
 
-        const symbol =
-          String(
+        const symbol = String(
+          parsed.symbol ||
+          parsed.ts ||
+          parsed.trading_symbol ||
+          parsed.TS ||
+          ""
+        )
+          .replace(/\s+/g, "")
+          .toUpperCase()
+          .trim();
 
-            parsed.symbol ||
-
-            parsed.ts ||
-
-            parsed.trading_symbol ||
-
-            parsed.TS ||
-
-            ""
-
-          )
-            .replace(/\s+/g, "")
-            .toUpperCase()
-            .trim();
-
-        const ltp =
-          Number(
-
-            parsed.ltp ||
-
-            parsed.lp ||
-
-            parsed.LTP ||
-
-            parsed.price ||
-
-            0
-          );
-
-        // ======================================
-        // INVALID TICK
-        // ======================================
+        const ltp = Number(
+          parsed.ltp ||
+          parsed.lp ||
+          parsed.LTP ||
+          parsed.price ||
+          0
+        );
 
         if (!symbol || !ltp) {
-
           return;
         }
 
-        console.log(
-          "📊 TICK:",
-          {
-            symbol,
-            ltp
-          }
-        );
+        await handleTick(symbol, ltp, {
+          source: "direct",
+          rawKey: symbol,
+        });
 
       } catch (err) {
 

@@ -142,7 +142,7 @@
       <b>⚙️ Controls</b><br><br>
       <button class="start" onclick="startTrading()">Start</button>
       <button class="stop" onclick="stopTrading()">Stop</button>
-      <button class="login" onclick="loginUpstox()">Login</button>
+      <button class="login" onclick="loginZerodha()">Login</button>
       <br><br>
       <div id="controlStatus"></div>
     </div>
@@ -286,7 +286,7 @@ socket.on("order", d => {
 // CONTROL
 async function startTrading(){ await fetch("/start"); }
 async function stopTrading(){ await fetch("/stop"); }
-function loginUpstox(){ window.location.href="/login"; }
+function loginZerodha(){ window.location.href="/login"; }
 
 async function loadControl(){
   const d = await (await fetch("/control")).json();
@@ -313,6 +313,7 @@ async function loadPositions(){
   positionsTable.innerHTML = "";
 
   data.forEach(p=>{
+    const symbol = p.tradingsymbol || p.trading_symbol || "";
     const type = p.quantity >= 0 ? "BUY" : "SELL";
     const entry = p.average_price || 0;
     const ltp = p.last_price || 0;
@@ -321,7 +322,7 @@ async function loadPositions(){
 
     positionsTable.innerHTML += `
       <tr>
-        <td>${p.trading_symbol}</td>
+        <td>${symbol}</td>
         <td>${Math.abs(p.quantity)}</td>
         <td>${type}</td>
         <td>${entry}</td>
@@ -341,8 +342,9 @@ function downloadPositions(){
   let csv="Symbol,Qty,Type,Entry,LTP,PnL\n";
 
   positionData.forEach(p=>{
+    const symbol = p.tradingsymbol || p.trading_symbol || "";
     const type = p.quantity >= 0 ? "BUY" : "SELL";
-    csv+=`${p.trading_symbol},${Math.abs(p.quantity)},${type},${p.average_price},${p.last_price},${p.pnl}\n`;
+    csv+=`${symbol},${Math.abs(p.quantity)},${type},${p.average_price},${p.last_price},${p.pnl}\n`;
   });
 
   const blob=new Blob([csv], { type: "text/csv" });
@@ -390,7 +392,7 @@ function downloadTrades(){
 // DAILY
 async function loadPnL(){
   const d = await (await fetch("/pnl")).json();
-  daily.innerText = `Trades: ${d.totalTrades} | PnL: ${d.totalPnL}`;
+  daily.innerText = `Trades: ${d.totalTrades} | Broker PnL: ${Number(d.brokerPnL || 0).toFixed(2)} | Closed PnL: ${Number(d.closedPnL || 0).toFixed(2)}`;
 }
 
 // AUTO REFRESH

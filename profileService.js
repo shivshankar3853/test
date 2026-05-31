@@ -1,23 +1,10 @@
-const axios = require("axios");
-const { getAccessToken } = require("./tokenManager");
+const { kiteGet } = require("./kiteClient");
 
 async function getProfile() {
   try {
-    const token = getAccessToken();
-
-    const res = await axios.get(
-      "https://api.upstox.com/v2/user/profile",
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }
-    );
-
-    return res.data.data;
-
+    return await kiteGet("/user/profile");
   } catch (err) {
-    console.error("❌ Profile Error:", err.response?.data);
+    console.error("Profile Error:", err.response?.data || err.message);
     return null;
   }
 }

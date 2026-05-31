@@ -1,23 +1,12 @@
-const axios = require("axios");
-const { getAccessToken } = require("./tokenManager");
+const { kiteGet } = require("./kiteClient");
 
 async function getPositions() {
   try {
-    const token = getAccessToken();
+    const data = await kiteGet("/portfolio/positions");
 
-    const res = await axios.get(
-      "https://api.upstox.com/v2/portfolio/short-term-positions",
-      {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
-      }
-    );
-
-    return res.data.data || [];
-
+    return data?.net || [];
   } catch (err) {
-    console.error("❌ Position Error:", err.response?.data);
+    console.error("Position Error:", err.response?.data || err.message);
     return [];
   }
 }

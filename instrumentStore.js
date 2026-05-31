@@ -17,6 +17,36 @@ const FILE_PATH =
     "instruments.csv"
   );
 
+const MONTH_MAP = {
+  JAN: 0,
+  FEB: 1,
+  MAR: 2,
+  APR: 3,
+  MAY: 4,
+  JUN: 5,
+  JUL: 6,
+  AUG: 7,
+  SEP: 8,
+  OCT: 9,
+  NOV: 10,
+  DEC: 11,
+};
+
+const MONTH_NAMES = [
+  "JAN",
+  "FEB",
+  "MAR",
+  "APR",
+  "MAY",
+  "JUN",
+  "JUL",
+  "AUG",
+  "SEP",
+  "OCT",
+  "NOV",
+  "DEC",
+];
+
 // ==============================
 // CACHE
 // ==============================
@@ -44,6 +74,145 @@ function normalize(str) {
     .trim()
 
     .toUpperCase();
+}
+
+function parseTradingKey(symbol) {
+  const normalized = normalize(symbol);
+
+  const match = normalized.match(
+    /^([A-Z]+)\s*(\d+(?:\.\d+)?)\s*(CE|PE)\s*(\d{1,2})\s*([A-Z]{3})\s*(\d{2})$/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const [, index, strike, type, day, month, year] = match;
+
+  const monthIndex = MONTH_MAP[month];
+
+  if (monthIndex === undefined) {
+    return null;
+  }
+
+  return {
+    index,
+    strike,
+    type,
+    day: Number(day),
+    month,
+    year: Number(year),
+    expiry: new Date(2000 + Number(year), monthIndex, Number(day)),
+  };
+}
+
+function parseSignalSymbol(symbol) {
+  const normalized = normalize(symbol);
+
+  const patterns = [
+    /^([A-Z]+)(\d{1,2})([A-Z]{3})(?:(\d{2}))?(\d+)(CE|PE)$/,
+    /^([A-Z]+)(\d{1,2})(\d{1,2})(\d{2})(\d+)(CE|PE)$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+
+    if (!match) {
+      continue;
+    }
+
+    const [, index, day, monthToken, yearToken, strike, type] = match;
+
+    let month = monthToken;
+
+    if (/^\d+$/.test(monthToken)) {
+      const monthNumber = Number(monthToken);
+
+      if (monthNumber < 1 || monthNumber > 12) {
+        continue;
+      }
+
+      month = MONTH_NAMES[monthNumber - 1];
+    }
+
+    if (MONTH_MAP[month] === undefined) {
+      continue;
+    }
+
+    return {
+      index,
+      strike,
+      type,
+      day: Number(day),
+      month,
+      year: yearToken ? Number(yearToken) : undefined,
+    };
+  }
+
+  return null;
+}
+
+function resolveSignalInstrument(symbol) {
+  const cache = loadInstrumentCache();
+  const signal = parseSignalSymbol(symbol);
+
+  if (!signal) {
+    return null;
+  }
+
+  const candidates = [];
+
+  for (const [key, data] of cache.entries()) {
+    const parsedKey = parseTradingKey(key);
+
+    if (!parsedKey) {
+      continue;
+    }
+
+    if (
+      parsedKey.index !== signal.index ||
+      parsedKey.strike !== String(signal.strike) ||
+      parsedKey.type !== signal.type
+    ) {
+      continue;
+    }
+
+    candidates.push({
+      key,
+      data,
+      parsedKey,
+    });
+  }
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const exactMatch = candidates.find((candidate) => {
+    return (
+      candidate.parsedKey.day === signal.day &&
+      candidate.parsedKey.month === signal.month
+    );
+  });
+
+  if (exactMatch) {
+    return exactMatch.data;
+  }
+
+  const now = new Date();
+  const futureMatches = candidates
+    .filter((candidate) => candidate.parsedKey.expiry >= now)
+    .sort((a, b) => a.parsedKey.expiry - b.parsedKey.expiry);
+
+  if (futureMatches.length) {
+    return futureMatches[0].data;
+  }
+
+  const latest = candidates.sort(
+    (a, b) => b.parsedKey.expiry - a.parsedKey.expiry
+  );
+
+  return latest[0].data;
 }
 
 // ==============================
@@ -100,7 +269,13 @@ async function ensureLocalFile() {
       // FILE STILL VALID
       // ==========================
 
-      if (diffDays < 7) {
+      const header =
+        fs.readFileSync(FILE_PATH, "utf-8").split("\n")[0] || "";
+
+      const legacyBrokerFile =
+        header.toLowerCase().includes("instrument_key");
+
+      if (diffDays < 7 && !legacyBrokerFile) {
 
         console.log(
 
@@ -201,6 +376,28 @@ function loadInstrumentCache() {
     const lines =
       data.split("\n");
 
+    const headers =
+      lines[0]
+        ?.split(",")
+        .map((header) => header.replace(/"/g, "").trim().toLowerCase()) || [];
+
+    const col = (name, fallback) => {
+      const index = headers.indexOf(name);
+      return index >= 0 ? index : fallback;
+    };
+
+    const tradingSymbolIndex =
+      col("tradingsymbol", col("trading_symbol", 0));
+
+    const instrumentTokenIndex =
+      col("instrument_token", col("instrument_key", 2));
+
+    const exchangeIndex =
+      col("exchange", 11);
+
+    const lotSizeIndex =
+      col("lot_size", 8);
+
     // ==========================
     // PROCESS LINES
     // ==========================
@@ -257,14 +454,25 @@ function loadInstrumentCache() {
       // trading_symbol,name,instrument_key,...
 
       const trading_symbol =
-        cols[0]?.trim();
+        cols[tradingSymbolIndex]
+          ?.replace(/"/g, "")
+          .trim();
 
       const instrument_key =
-        cols[2]?.trim();
+        cols[instrumentTokenIndex]
+          ?.replace(/"/g, "")
+          .trim();
+
+      const exchange =
+        cols[exchangeIndex]
+          ?.replace(/"/g, "")
+          .trim();
 
       const lot_size =
         Number(
-          cols[6]?.trim()
+          cols[lotSizeIndex]
+            ?.replace(/"/g, "")
+            .trim()
         ) || 1;
 
       // ==========================
@@ -301,15 +509,28 @@ function loadInstrumentCache() {
       // SAVE CACHE
       // ==========================
 
+      const instrument = {
+        token: normalizedKey,
+        tradingSymbol: trading_symbol,
+        exchange: exchange || "NFO",
+        lotSize: lot_size
+      };
+
       instrumentCache.set(
 
         normalizedSymbol,
 
-        {
-          token: normalizedKey,
-          lotSize: lot_size
-        }
+        instrument
       );
+
+      if (exchange) {
+        instrumentCache.set(
+
+          `${normalizedSymbol}:${normalize(exchange)}`,
+
+          instrument
+        );
+      }
     }
 
     console.log(
@@ -338,7 +559,7 @@ function loadInstrumentCache() {
 // FIND INSTRUMENT
 // ==============================
 
-function findInstrument(symbol) {
+function findInstrument(symbol, exchange) {
 
   const cache =
     loadInstrumentCache();
@@ -347,18 +568,46 @@ function findInstrument(symbol) {
 
     normalize(symbol);
 
+  const normalizedExchange =
+
+    normalize(exchange);
+
+  const exchangeResult =
+
+    normalizedExchange
+
+      ? cache.get(
+          `${normalizedInput}:${normalizedExchange}`
+        )
+
+      : null;
+
   const result =
+
+    exchangeResult ||
 
     cache.get(
       normalizedInput
     );
 
-  // ==========================
-  // NOT FOUND
-  // ==========================
+  if (result) {
+    console.log(
 
-  if (!result) {
+      "🎯 FOUND:",
 
+      normalizedInput,
+
+      "→",
+
+      result
+    );
+
+    return result;
+  }
+
+  const fallback = resolveSignalInstrument(normalizedInput);
+
+  if (!fallback) {
     console.log(
 
       "⚠️ NOT FOUND:",
@@ -369,22 +618,18 @@ function findInstrument(symbol) {
     return null;
   }
 
-  // ==========================
-  // FOUND
-  // ==========================
-
   console.log(
 
-    "🎯 FOUND:",
+    "🎯 FALLBACK FOUND:",
 
     normalizedInput,
 
     "→",
 
-    result
+    fallback
   );
 
-  return result;
+  return fallback;
 }
 
 // ==============================

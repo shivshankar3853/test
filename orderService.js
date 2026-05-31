@@ -1,21 +1,25 @@
-const axios = require("axios");
+const { kiteGet, kitePost } = require("./kiteClient");
 
-const { getAccessToken } = require("./tokenManager");
 const Trade = require("./models/Trade");
-
+const { reconcileBrokerOrder } = require("./reconciliationService");
 const { findInstrument } = require("./instrumentStore");
 const { decodeSymbol } = require("./symbolDecoder");
-
 const { addPosition, removePosition } = require("./positionCache");
 const { isPaperTrading } = require("./utils/tradingMode");
 
-// ==============================
-// 🕒 MARKET TIME CHECK
-// ==============================
+function minutesSinceMidnight(date) {
+  return date.getHours() * 60 + date.getMinutes();
+}
 
-function isMarketOpen() {
+function inTimeRange(currentMinutes, startHour, startMinute, endHour, endMinute) {
+  const start = startHour * 60 + startMinute;
+  const end = endHour * 60 + endMinute;
+
+  return currentMinutes >= start && currentMinutes <= end;
+}
+
+function isMarketOpen(exchange, tradingSymbol) {
   const now = new Date();
-
   const istTime = new Date(
     now.toLocaleString("en-US", {
       timeZone: "Asia/Kolkata",
@@ -23,408 +27,401 @@ function isMarketOpen() {
   );
 
   const day = istTime.getDay();
-  const hours = istTime.getHours();
-  const minutes = istTime.getMinutes();
+  const currentMinutes = minutesSinceMidnight(istTime);
 
   if (day === 0 || day === 6) return false;
 
-  const currentMinutes = hours * 60 + minutes;
+  const normalizedExchange = String(exchange || "").toUpperCase();
+  const normalizedSymbol = String(tradingSymbol || "").replace(/\s+/g, "").toUpperCase();
 
-  const marketStart = 9 * 60 + 15;
-  const marketEnd = 15 * 60 + 30;
+  if (normalizedExchange === "MCX") {
+    if (
+      normalizedSymbol.startsWith("COTTON") ||
+      normalizedSymbol.startsWith("COTTONOIL") ||
+      normalizedSymbol.startsWith("KAPAS")
+    ) {
+      return inTimeRange(currentMinutes, 9, 0, 21, 0);
+    }
 
-  return (
-    currentMinutes >= marketStart &&
-    currentMinutes <= marketEnd
-  );
+    return inTimeRange(currentMinutes, 9, 0, 23, 30);
+  }
+
+  return inTimeRange(currentMinutes, 9, 15, 15, 30);
 }
 
-// ==============================
-// 💰 FETCH EXECUTED PRICE
-// ==============================
-
-async function fetchExecutedPrice(orderId, token) {
+async function fetchExecutedPrice(orderId) {
   try {
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
-    const response = await axios.get(
-      `https://api.upstox.com/v2/order/details?order_id=${orderId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
-    );
+    const history = await kiteGet(`/orders/${orderId}`);
+    const rows = Array.isArray(history) ? history : [];
+    const filled = rows.slice().reverse().find((row) => Number(row?.average_price || 0));
+    const latest = filled || rows.at(-1);
 
-    const data = response.data?.data;
-
-    return Number(data?.average_price || data?.price || 0);
+    return Number(latest?.average_price || latest?.price || 0);
   } catch (err) {
-    console.log("⚠️ Executed price fetch failed");
+    console.log("Executed price fetch failed:", err.response?.data || err.message);
     return 0;
   }
 }
 
-// ==============================
-// 🚀 PLACE ORDER
-// ==============================
+function normalizeSymbolValue(value) {
+  return String(value || "")
+    .replace(/\s+/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function normalizeAction(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeQuantity(value) {
+  return Number(value ?? 0);
+}
+
+function normalizeProduct(value) {
+  const product = String(value || "").trim().toUpperCase();
+
+  if (["CNC", "NRML", "MIS", "MTF"].includes(product)) return product;
+  if (product === "D") return "CNC";
+  if (product === "I") return "MIS";
+
+  return "MIS";
+}
+
+function normalizeVariety(value) {
+  const variety = String(value || "regular").trim().toLowerCase();
+
+  if (["regular", "amo", "co", "iceberg", "auction"].includes(variety)) {
+    return variety;
+  }
+
+  return "regular";
+}
+
+function isAmoOrder(variety) {
+  return normalizeVariety(variety) === "amo";
+}
+
+function normalizeBroker(value) {
+  return String(value || "ZERODHA").trim().toUpperCase();
+}
+
+function resolveTargetPrice(entryPrice, action, order) {
+  const absoluteTarget = Number(order?.targetPrice ?? order?.TARGET ?? NaN);
+
+  if (Number.isFinite(absoluteTarget) && absoluteTarget > 0) {
+    return absoluteTarget;
+  }
+
+  const targetPoints = Number(order?.targetPoints ?? order?.target_points ?? order?.target ?? 10);
+  const points = Number.isFinite(targetPoints) && targetPoints > 0 ? targetPoints : 10;
+
+  return action === "BUY" ? entryPrice + points : Math.max(entryPrice - points, 0.05);
+}
+
+function extractOrderId(responseData) {
+  const data = responseData?.data;
+
+  if (Array.isArray(data)) {
+    const firstOrder = data.find((item) => item?.order_id);
+    return String(firstOrder?.order_id || "").trim();
+  }
+
+  return String(
+    data?.order_id ||
+      responseData?.order_id ||
+      data?.orderId ||
+      responseData?.orderId ||
+      ""
+  ).trim();
+}
+
+function resolveInstrument(rawSymbol, exchange) {
+  let instrumentData = null;
+
+  try {
+    const decoded = decodeSymbol(rawSymbol);
+
+    if (decoded && decoded.year) {
+      const shortYear = decoded.year.toString().slice(-2);
+      const formats = [
+        `${decoded.index} ${decoded.strike} ${decoded.type} ${decoded.day} ${decoded.month} ${shortYear}`,
+        `${decoded.index} ${decoded.day} ${decoded.month} ${shortYear} ${decoded.type} ${decoded.strike}`,
+      ];
+
+      for (const format of formats) {
+        instrumentData = findInstrument(format, exchange);
+
+        if (instrumentData) break;
+      }
+    }
+  } catch (err) {
+    console.log("Using direct instrument lookup for symbol:", rawSymbol);
+  }
+
+  return instrumentData || findInstrument(rawSymbol, exchange);
+}
 
 async function placeOrder(order) {
   try {
-    const token = isPaperTrading()
-  ? null
-  : getAccessToken();
+    const action = normalizeAction(order.transaction_type || order.TT || order.action || order.side || order.tt);
+    const quantity = normalizeQuantity(order.quantity ?? order.qty ?? order.Q);
+    const rawSymbol = normalizeSymbolValue(
+      order.tradingsymbol || order.trading_symbol || order.TS || order.symbol
+    );
+    const broker = normalizeBroker(order.broker || order.AT);
 
-    // ======================
-    // VALIDATION
-    // ======================
-    const action = String(order.transaction_type || "")
-      .trim()
-      .toUpperCase();
-
-    const quantity = Number(order.quantity);
-
-    const rawSymbol = String(order.TS || "")
-      .trim()
-      .toUpperCase();
-
-    if (!["BUY", "SELL"].includes(action))
-      throw new Error("Invalid Action");
-
+    if (!["BUY", "SELL"].includes(action)) throw new Error("Invalid Action");
     if (!rawSymbol) throw new Error("Symbol missing");
+    if (!quantity || quantity <= 0) throw new Error("Invalid quantity");
+    if (broker !== "ZERODHA") throw new Error(`Unsupported broker: ${broker}`);
 
-    if (!quantity || quantity <= 0)
-      throw new Error("Invalid quantity");
+    const requestedExchangeValue = order.E || order.exchange;
+    const requestedExchange = requestedExchangeValue ? String(requestedExchangeValue).toUpperCase() : "";
+    const instrumentData = resolveInstrument(rawSymbol, requestedExchange);
 
-    // ======================
-    // DECODE
-    // ======================
-    const decoded = decodeSymbol(rawSymbol);
-
-if (!decoded || !decoded.year) {
-  throw new Error("Invalid symbol format");
-}
-
-    const shortYear = decoded.year.toString().slice(-2);
-
-    const formats = [
-      `${decoded.index} ${decoded.strike} ${decoded.type} ${decoded.day} ${decoded.month} ${shortYear}`,
-      `${decoded.index} ${decoded.day} ${decoded.month} ${shortYear} ${decoded.type} ${decoded.strike}`,
-    ];
-
-    let instrumentKey = null;
-
-    for (const f of formats) {
-      const instrumentData = findInstrument(f);
-
-      if (instrumentData) {
-        instrumentKey = instrumentData.token;
-
-        const lotSize = Number(instrumentData.lotSize || 1);
-
-        if (quantity % lotSize !== 0) {
-          throw new Error(`Invalid quantity. Lot size = ${lotSize}`);
-        }
-
-        break;
-      }
-    }
-
-    if (!instrumentKey) {
+    if (!instrumentData) {
       throw new Error("Instrument not found for: " + rawSymbol);
     }
 
-    // ======================
-    // ORDER PAYLOAD
-    // ======================
+    const instrumentKey = instrumentData.token;
+    const tradingSymbol = order.tradingsymbol || order.TS || instrumentData.tradingSymbol || rawSymbol;
+    const exchange = String(order.E || order.exchange || instrumentData.exchange || "NFO").toUpperCase();
+    const product = normalizeProduct(order.P || order.product);
+    const variety = normalizeVariety(order.V || order.variety);
+    const lotSize = Number(instrumentData.lotSize || 1);
+
+    if (quantity % lotSize !== 0) {
+      throw new Error(`Invalid quantity. Lot size = ${lotSize}`);
+    }
+
     const orderPayload = {
-      quantity,
-      product: order.product === "NRML" ? "D" : "I",
-      validity: order.validity || "DAY",
-      price: 0,
-      instrument_token: instrumentKey,
-      order_type: order.order_type || "MARKET",
+      exchange,
+      tradingsymbol: tradingSymbol,
       transaction_type: action,
-      disclosed_quantity: 0,
-      trigger_price: 0,
-      is_amo: false,
+      quantity,
+      product,
+      order_type: order.order_type || order.OT || "MARKET",
+      validity: order.VL || order.validity || "DAY",
+      price: Number(order.price ?? order.LTP ?? 0),
+      trigger_price: Number(order.trigger_price || 0),
+      disclosed_quantity: Number(order.disclosed_quantity || 0),
+      variety,
     };
-// ======================
-// 📄 PAPER / LIVE ORDER
-// ======================
 
-let orderData;
+    const kiteOrderPayload = {
+      exchange: orderPayload.exchange,
+      tradingsymbol: orderPayload.tradingsymbol,
+      transaction_type: orderPayload.transaction_type,
+      quantity: orderPayload.quantity,
+      product: orderPayload.product,
+      order_type: orderPayload.order_type,
+      validity: orderPayload.validity,
+      price: orderPayload.price,
+      trigger_price: orderPayload.trigger_price,
+      disclosed_quantity: orderPayload.disclosed_quantity,
+    };
 
-if (isPaperTrading()) {
+    let orderData;
 
-  console.log("📄 PAPER TRADE MODE");
+    if (isPaperTrading()) {
+      console.log("PAPER TRADE MODE");
 
-  const simulatedPrice =
-  Number(order.price) ||
-  Number(order.LTP) ||
-  Math.round(
-    (Math.random() * 100 + 100) * 100
-  ) / 100;
+      const simulatedPrice =
+        Number(order.price) ||
+        Number(order.LTP) ||
+        Math.round((Math.random() * 100 + 100) * 100) / 100;
 
-  orderData = {
-    data: {
-      order_id:
-        "PAPER_" + Date.now(),
+      orderData = {
+        data: {
+          order_id: "PAPER_" + Date.now(),
+          average_price: simulatedPrice,
+          price: simulatedPrice,
+        },
+      };
+    } else {
+      if (!isAmoOrder(variety) && !isMarketOpen(exchange, tradingSymbol)) {
+        throw new Error("Market is closed");
+      }
 
-      average_price:
-        simulatedPrice,
-
-      price:
-        simulatedPrice,
-    },
-  };
-
-} else {
-
- 
-  // ======================
-  // 🚀 LIVE ORDER
-  // ======================
-if (!isMarketOpen()) {
-  throw new Error(
-    "Market is closed"
-  );
-}
-
-const response = await axios.post(
-    "https://api.upstox.com/v2/order/place",
-    orderPayload,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type":
-          "application/json",
-      },
+      orderData = await kitePost(`/orders/${variety}`, kiteOrderPayload);
     }
-  );
 
-  orderData = response.data;
-}
+    const liveOrderId = extractOrderId(orderData);
 
-// ======================
-// COMMON FLOW
-// ======================
+    if (!isPaperTrading() && !liveOrderId) {
+      throw new Error("Broker order id missing after placement");
+    }
 
-let tradePrice = Number(
-  orderData?.data?.average_price ||
-  orderData?.data?.price ||
-  0
-);
+    if (!isPaperTrading()) {
+      const brokerCheck = await reconcileBrokerOrder(liveOrderId, instrumentKey, action);
 
-// fetch actual executed price only in LIVE
-if (
-  !tradePrice &&
-  !isPaperTrading()
-) {
+      if (!brokerCheck.ok) {
+        throw new Error(`Broker reconciliation failed: ${brokerCheck.reason}`);
+      }
+    }
 
-  tradePrice =
-    await fetchExecutedPrice(
-      orderData.data?.order_id,
-      token
-    );
-}
-    const targetPoints = Number(order.TARGET || 10);
+    let tradePrice = Number(orderData?.data?.average_price || orderData?.data?.price || 0);
 
-    // ======================
-    // BUY
-    // ======================
-    if (action === "BUY") {
-      await Trade.create({
-        side: "BUY",
-        quantity,
-        instrument: instrumentKey,
-        orderId: orderData.data?.order_id || "NA",
-        price: tradePrice,
-        status: "OPEN",
-        mode: process.env.TRADING_MODE,
-        time: new Date(),
-      });
+    if (!tradePrice && !isPaperTrading()) {
+      tradePrice = await fetchExecutedPrice(liveOrderId);
+    }
 
-      let targetPrice = tradePrice + targetPoints;
+    if (!tradePrice) {
+      tradePrice = Number(order.price || order.LTP || 0);
+    }
 
-      addPosition(instrumentKey, {
-        symbol: rawSymbol, // ✅ FIXED548296
-        instrument: instrumentKey,
-        quantity,
-        side: "BUY",
-        entryPrice: tradePrice,
-        targetPrice,
-        orderId: orderData.data?.order_id,
-        isExiting: false,
-        time: new Date(),
-      });
+    const targetPrice = resolveTargetPrice(tradePrice, action, order);
+    const tradeDoc = await Trade.create({
+      symbol: rawSymbol,
+      side: action,
+      quantity,
+      instrument: instrumentKey,
+      orderId: liveOrderId || "NA",
+      price: tradePrice,
+      targetPrice,
+      status: "OPEN",
+      mode: process.env.TRADING_MODE || "LIVE",
+      source: order.source || "tradingview",
+      broker,
+      time: new Date(),
+    });
 
-      const { subscribeSymbol } = require("./wsService");
+    addPosition(instrumentKey, {
+      symbol: rawSymbol,
+      tradingSymbol,
+      exchange,
+      product,
+      variety,
+      broker,
+      instrument: instrumentKey,
+      quantity,
+      side: action,
+      entryPrice: tradePrice,
+      targetPrice,
+      orderId: liveOrderId,
+      tradeId: String(tradeDoc._id),
+      isExiting: false,
+      time: new Date(),
+      lastLtp: tradePrice,
+      highestLtp: tradePrice,
+      lowestLtp: tradePrice,
+      tickCount: 0,
+    });
 
-      subscribeSymbol(instrumentKey); // ✅ FIXED (IMPORTANT)
+    const { subscribeSymbol } = require("./wsService");
+    subscribeSymbol(instrumentKey);
 
-      console.log("🎯 BUY Position Saved:", {
+    console.log("Position Saved:", {
+      symbol: rawSymbol,
+      entryPrice: tradePrice,
+      targetPrice,
+      side: action,
+    });
+
+    if (global.io) {
+      global.io.emit("order", {
+        ...orderData,
+        tradeId: String(tradeDoc._id),
         symbol: rawSymbol,
-        entryPrice: tradePrice,
-        targetPrice,
+        instrument: instrumentKey,
       });
     }
-
-    // ======================
-    // SELL
-    // ======================
-    else if (action === "SELL") {
-      await Trade.create({
-        side: "SELL",
-        quantity,
-        instrument: instrumentKey,
-        orderId: orderData.data?.order_id || "NA",
-        price: tradePrice,
-        status: "OPEN",
-        mode: process.env.TRADING_MODE,
-        time: new Date(),
-      });
-
-      let targetPrice = tradePrice - targetPoints;
-      if (targetPrice <= 0) targetPrice = 0.05;
-
-      addPosition(instrumentKey, {
-        symbol: rawSymbol, // ✅ FIXED
-        instrument: instrumentKey,
-        quantity,
-        side: "SELL",
-        entryPrice: tradePrice,
-        targetPrice,
-        orderId: orderData.data?.order_id,
-        isExiting: false,
-        time: new Date(),
-      });
-
-      const { subscribeSymbol } = require("./wsService");
-
-      subscribeSymbol(instrumentKey); // ✅ FIXED
-
-      console.log("🎯 SELL Position Saved:", {
-        symbol: rawSymbol,
-        entryPrice: tradePrice,
-        targetPrice,
-      });
-    }
-
-    if (global.io) global.io.emit("order", orderData);
 
     return orderData;
   } catch (err) {
-    console.log("❌ Order Error:", err.response?.data || err.message);
+    console.log("Order Error:", err.response?.data || err.message);
     throw err;
   }
 }
 
-// ==============================
-// 🚪 EXIT POSITION
-// ==============================
-
 async function exitPosition(position) {
-
   try {
-
-    if (position.isExiting) return;
+    if (!position || position.isExiting) {
+      return;
+    }
 
     position.isExiting = true;
 
-    // ======================
-    // 📄 PAPER EXIT
-    // ======================
+    const exitPrice = Number(position.lastLtp || position.entryPrice || 0);
+    const entryPrice = Number(position.entryPrice || 0);
+    const qty = Number(position.quantity || 0);
+    const pnl =
+      position.side === "BUY"
+        ? (exitPrice - entryPrice) * qty
+        : (entryPrice - exitPrice) * qty;
 
     if (isPaperTrading()) {
+      console.log("PAPER EXIT:", position.symbol);
+    } else {
+      const exitSide = position.side === "BUY" ? "SELL" : "BUY";
+      const exitPayload = {
+        tradingsymbol: position.tradingSymbol || position.symbol,
+        exchange: position.exchange || "NFO",
+        transaction_type: exitSide,
+        quantity: qty,
+        product: normalizeProduct(position.product),
+        order_type: "MARKET",
+        validity: "DAY",
+        price: 0,
+        trigger_price: 0,
+        disclosed_quantity: 0,
+        variety: normalizeVariety(position.variety),
+      };
 
-      console.log(
-        "📄 PAPER EXIT:",
-        position.symbol
-      );
+      const { variety, ...kiteExitPayload } = exitPayload;
+      const exitResponse = await kitePost(`/orders/${variety}`, kiteExitPayload);
+      const exitOrderId = extractOrderId(exitResponse);
+      const brokerCheck = await reconcileBrokerOrder(exitOrderId, position.instrument, exitSide);
 
-      const { unsubscribeSymbol } =
-        require("./wsService");
-
-      unsubscribeSymbol(
-        position.instrument
-      );
-
-      removePosition(
-        position.instrument
-      );
-
-      return true;
+      if (!brokerCheck.ok) {
+        throw new Error(`Exit broker reconciliation failed: ${brokerCheck.reason}`);
+      }
     }
 
-    // ======================
-    // 🚀 LIVE EXIT
-    // ======================
+    const updateFilter = position.tradeId
+      ? { _id: position.tradeId }
+      : { orderId: position.orderId || "NA", status: "OPEN" };
 
-    const token = getAccessToken();
-
-    const exitSide =
-      position.side === "BUY"
-        ? "SELL"
-        : "BUY";
-
-    const exitPayload = {
-      quantity: position.quantity,
-      product: "D",
-      validity: "DAY",
-      price: 0,
-      instrument_token:
-        position.instrument,
-
-      order_type: "MARKET",
-
-      transaction_type:
-        exitSide,
-
-      disclosed_quantity: 0,
-      trigger_price: 0,
-      is_amo: false,
-    };
-
-    await axios.post(
-      "https://api.upstox.com/v2/order/place",
-      exitPayload,
+    await Trade.findOneAndUpdate(
+      updateFilter,
       {
-        headers: {
-          Authorization:
-            `Bearer ${token}`,
-
-          "Content-Type":
-            "application/json",
+        $set: {
+          status: "CLOSED",
+          exitPrice,
+          pnl,
+          closedAt: new Date(),
+          updatedAt: new Date(),
         },
-      }
+      },
+      { new: true }
     );
 
-    const { unsubscribeSymbol } =
-      require("./wsService");
+    const { unsubscribeSymbol } = require("./wsService");
+    unsubscribeSymbol(position.instrument);
+    removePosition(position.instrument);
 
-    unsubscribeSymbol(
-      position.instrument
-    );
-
-    removePosition(
-      position.instrument
-    );
+    if (global.io) {
+      global.io.emit("trade_closed", {
+        symbol: position.symbol,
+        instrument: position.instrument,
+        exitPrice,
+        pnl,
+        side: position.side,
+      });
+    }
 
     return true;
-
   } catch (err) {
-
     position.isExiting = false;
-
-    console.log(
-      "❌ Exit Error:",
-      err.response?.data ||
-      err.message
-    );
+    console.log("Exit Error:", err.response?.data || err.message);
+    return false;
   }
 }
-// ==============================
 
 async function getTradeLog() {
   return await Trade.find().sort({ time: -1 });

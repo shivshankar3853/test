@@ -4,16 +4,15 @@ const express = require("express");
 
 const http = require("http");
 
-const { Server } = require("socket.io");
+const path = require("path");
 
-const axios = require("axios");
+const { Server } = require("socket.io");
 
 // ================= SERVICES =================
 
 const {
   loadToken,
-  isTokenExpired,
-  getAccessToken
+  isTokenExpired
 } = require("./tokenManager");
 
 const {
@@ -40,6 +39,12 @@ const {
 const connectDB = require("./db");
 
 const Trade = require("./models/Trade");
+const Tick = require("./models/Tick");
+const {
+  fetchBrokerOrders,
+  fetchBrokerPositions,
+  reconcileBrokerOrder
+} = require("./reconciliationService");
 
 const {
   startTrading,
@@ -232,6 +237,19 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
+app.post("/test-signal", async (req, res) => {
+  try {
+    await handleWebhook(req, res);
+  } catch (err) {
+    console.error("Test signal error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.get("/tick-dashboard", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "tick-dashboard.html"));
+});
+
 // =================================
 // HOME
 // =================================
@@ -294,40 +312,114 @@ app.get("/trades", async (req, res) => {
   }
 });
 
+app.get("/ticks", async (req, res) => {
+  try {
+    const ticks = await Tick.find()
+      .sort({ timestamp: -1 })
+      .limit(200);
+
+    res.json(ticks);
+  } catch (err) {
+    console.error("Tick fetch error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/reconcile", async (req, res) => {
+  try {
+    const { orderId, instrument, side } = req.body || {};
+
+    if (orderId) {
+      const result = await reconcileBrokerOrder(orderId, instrument, side);
+      return res.json(result);
+    }
+
+    const openTrades = await Trade.find({ status: "OPEN" }).sort({ time: -1 });
+    const results = await Promise.all(
+      openTrades.map(async (trade) => ({
+        tradeId: String(trade._id),
+        orderId: trade.orderId,
+        symbol: trade.symbol,
+        instrument: trade.instrument,
+        side: trade.side,
+        ...(await reconcileBrokerOrder(trade.orderId, trade.instrument, trade.side)),
+      }))
+    );
+
+    res.json({
+      ok: true,
+      total: openTrades.length,
+      results,
+    });
+  } catch (err) {
+    console.error("Reconciliation error:", err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // =================================
 // PNL
 // =================================
 
 app.get("/pnl", async (req, res) => {
 
-  const today = new Date();
+  try {
 
-  today.setHours(0, 0, 0, 0);
+    const today = new Date();
 
-  const trades =
-    await Trade.find({
+    today.setHours(0, 0, 0, 0);
 
-      time: { $gte: today },
+    const trades =
+      await Trade.find({
 
-      status: "CLOSED"
+        time: { $gte: today },
+
+        status: "CLOSED"
+      });
+
+    const closedPnL =
+      trades.reduce(
+
+        (sum, t) =>
+          sum + (t.pnl || 0),
+
+        0
+      );
+
+    const positions =
+      await fetchBrokerPositions();
+
+    const brokerPnL =
+      positions.reduce(
+
+        (sum, p) =>
+          sum + Number(p.pnl || 0),
+
+        0
+      );
+
+    res.json({
+
+      totalTrades:
+        trades.length,
+
+      closedPnL,
+
+      brokerPnL,
+
+      totalPnL:
+        brokerPnL || closedPnL
     });
 
-  const totalPnL =
-    trades.reduce(
+  } catch (err) {
 
-      (sum, t) =>
-        sum + (t.pnl || 0),
+    console.error("PnL error:", err.message);
 
-      0
-    );
-
-  res.json({
-
-    totalTrades:
-      trades.length,
-
-    totalPnL
-  });
+    res.status(500).json({
+      ok: false,
+      error: err.message
+    });
+  }
 });
 
 // =================================
@@ -441,48 +533,11 @@ async function isDuplicateTrade(symbol) {
 
   try {
 
-    const accessToken =
-      getAccessToken();
-
-    // =================================
-    // POSITIONS
-    // =================================
-
-    const posRes =
-      await axios.get(
-
-        "https://api.upstox.com/v2/portfolio/short-term-positions",
-
-        {
-          headers: {
-            Authorization:
-              `Bearer ${accessToken}`
-          }
-        }
-      );
-
     const positions =
-      posRes.data?.data || [];
-
-    // =================================
-    // ORDERS
-    // =================================
-
-    const ordRes =
-      await axios.get(
-
-        "https://api.upstox.com/v2/order/retrieve-all",
-
-        {
-          headers: {
-            Authorization:
-              `Bearer ${accessToken}`
-          }
-        }
-      );
+      await fetchBrokerPositions();
 
     const orders =
-      ordRes.data?.data || [];
+      await fetchBrokerOrders();
 
     // =================================
     // CHECK DUPLICATES
@@ -491,7 +546,9 @@ async function isDuplicateTrade(symbol) {
     const positionExists =
       positions.some((p) =>
 
-        p.trading_symbol === symbol
+        String(p.tradingsymbol || "")
+          .toUpperCase() === String(symbol || "")
+          .toUpperCase()
 
         &&
 
@@ -501,7 +558,9 @@ async function isDuplicateTrade(symbol) {
     const orderExists =
       orders.some((o) =>
 
-        o.trading_symbol === symbol
+        String(o.tradingsymbol || "")
+          .toUpperCase() === String(symbol || "")
+          .toUpperCase()
 
         &&
 

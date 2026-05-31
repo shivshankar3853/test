@@ -1,62 +1,67 @@
 const axios = require("axios");
-const qs = require("qs");   // 👈 ADD THIS
+const crypto = require("crypto");
+const qs = require("qs");
+
 const config = require("./config");
 const { saveToken } = require("./tokenManager");
 
-// Step 1: Login redirect
 function login(req, res) {
-  const loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${config.API_KEY}&redirect_uri=${config.REDIRECT_URI}`;
+  if (!config.API_KEY) {
+    return res.status(500).send("Zerodha API key missing");
+  }
+
+  const loginUrl = `https://kite.zerodha.com/connect/login?v=3&api_key=${encodeURIComponent(config.API_KEY)}`;
   res.redirect(loginUrl);
 }
 
-// Step 2: Callback (IMPORTANT PART)
 async function callback(req, res) {
-  const code = req.query.code;
+  const requestToken = req.query.request_token;
 
-  if (!code) {
-    return res.send("❌ No code received");
+  if (!requestToken) {
+    return res.send("No Zerodha request token received");
   }
 
   try {
-    // 🔥 THIS IS WHERE YOUR CODE GOES
+    if (!config.API_KEY || !config.API_SECRET) {
+      throw new Error("Zerodha API key or secret missing");
+    }
+
+    const checksum = crypto
+      .createHash("sha256")
+      .update(`${config.API_KEY}${requestToken}${config.API_SECRET}`)
+      .digest("hex");
+
     const response = await axios.post(
-      "https://api.upstox.com/v2/login/authorization/token",
+      "https://api.kite.trade/session/token",
       qs.stringify({
-        grant_type: "authorization_code",
-        code: code,
-        client_id: config.API_KEY,
-        client_secret: config.API_SECRET,
-        redirect_uri: config.REDIRECT_URI
+        api_key: config.API_KEY,
+        request_token: requestToken,
+        checksum,
       }),
       {
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded"
-        }
+          "X-Kite-Version": "3",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
       }
     );
-//===========================
-    if (!response.data.access_token) {
-   throw new Error("Access token missing");
-}
-//===========================
-    // Save token
+
+    const tokenData = response.data?.data;
+
+    if (!tokenData?.access_token) {
+      throw new Error("Access token missing");
+    }
+
     saveToken({
-      ...response.data,
-      created_at: Math.floor(Date.now() / 1000)
+      ...tokenData,
+      created_at: Math.floor(Date.now() / 1000),
     });
 
-    console.log("✅ Token Generated & Saved");
-
-    
+    console.log("Zerodha token generated and saved");
     res.redirect("/dashboard.html");
-
   } catch (err) {
-    console.error(
-   "❌ Token Error:",
-   err.response?.data?.errors ||
-   err.message
-);
-    res.send("❌ Token generation failed");
+    console.error("Token Error:", err.response?.data || err.message);
+    res.send("Zerodha token generation failed");
   }
 }
 
