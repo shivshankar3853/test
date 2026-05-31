@@ -15,10 +15,13 @@ function login(req, res) {
 }
 
 async function callback(req, res) {
-  const requestToken = req.query.request_token;
+  const requestToken = req.query.request_token || req.query.requestToken;
 
   if (!requestToken) {
-    return res.send("No Zerodha request token received");
+    const queryKeys = Object.keys(req.query || {}).join(", ") || "none";
+    return res
+      .status(400)
+      .send(`No Zerodha request_token received. Query keys: ${queryKeys}`);
   }
 
   try {

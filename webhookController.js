@@ -29,6 +29,7 @@ function normalizeSignalPayload(signal = {}) {
     price: Number(source.price ?? source.LTP ?? source.ltp ?? 0),
     trigger_price: Number(source.trigger_price ?? 0),
     disclosed_quantity: Number(source.disclosed_quantity ?? 0),
+    market_protection: Number(source.MP ?? source.market_protection ?? source.marketProtection ?? NaN),
     variety: String(source.V || source.variety || "regular").trim().toLowerCase(),
     AT: String(source.AT || source.broker || "ZERODHA").trim().toUpperCase(),
     TARGET: Number(source.TARGET ?? source.target ?? source.targetPrice ?? NaN),
@@ -65,6 +66,9 @@ function convertTV(signal) {
       price: normalized.price || 0,
       trigger_price: normalized.trigger_price || 0,
       disclosed_quantity: normalized.disclosed_quantity || 0,
+      market_protection: Number.isFinite(normalized.market_protection)
+        ? normalized.market_protection
+        : undefined,
       variety: normalized.variety || "regular",
       AT: normalized.AT || "ZERODHA",
       broker: normalized.AT || "ZERODHA",

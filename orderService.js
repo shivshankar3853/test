@@ -110,6 +110,25 @@ function normalizeBroker(value) {
   return String(value || "ZERODHA").trim().toUpperCase();
 }
 
+function needsMarketProtection(orderType) {
+  const normalized = String(orderType || "").trim().toUpperCase();
+
+  return normalized === "MARKET" || normalized === "SL-M";
+}
+
+function normalizeMarketProtection(value, orderType) {
+  if (!needsMarketProtection(orderType)) {
+    return undefined;
+  }
+
+  const protection = Number(value ?? -1);
+
+  if (protection === -1) return -1;
+  if (protection >= 0 && protection <= 100) return protection;
+
+  return -1;
+}
+
 function resolveTargetPrice(entryPrice, action, order) {
   const absoluteTarget = Number(order?.targetPrice ?? order?.TARGET ?? NaN);
 
@@ -193,6 +212,11 @@ async function placeOrder(order) {
     const exchange = String(order.E || order.exchange || instrumentData.exchange || "NFO").toUpperCase();
     const product = normalizeProduct(order.P || order.product);
     const variety = normalizeVariety(order.V || order.variety);
+    const orderType = order.order_type || order.OT || "MARKET";
+    const marketProtection = normalizeMarketProtection(
+      order.MP ?? order.market_protection ?? order.marketProtection,
+      orderType
+    );
     const lotSize = Number(instrumentData.lotSize || 1);
 
     if (quantity % lotSize !== 0) {
@@ -205,11 +229,12 @@ async function placeOrder(order) {
       transaction_type: action,
       quantity,
       product,
-      order_type: order.order_type || order.OT || "MARKET",
+      order_type: orderType,
       validity: order.VL || order.validity || "DAY",
       price: Number(order.price ?? order.LTP ?? 0),
       trigger_price: Number(order.trigger_price || 0),
       disclosed_quantity: Number(order.disclosed_quantity || 0),
+      market_protection: marketProtection,
       variety,
     };
 
@@ -224,6 +249,7 @@ async function placeOrder(order) {
       price: orderPayload.price,
       trigger_price: orderPayload.trigger_price,
       disclosed_quantity: orderPayload.disclosed_quantity,
+      market_protection: orderPayload.market_protection,
     };
 
     let orderData;
@@ -370,6 +396,7 @@ async function exitPosition(position) {
         price: 0,
         trigger_price: 0,
         disclosed_quantity: 0,
+        market_protection: -1,
         variety: normalizeVariety(position.variety),
       };
 
