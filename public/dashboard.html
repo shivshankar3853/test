@@ -131,7 +131,14 @@
 
 <body>
 
-<header>🚀 Algo Trading Dashboard</header>
+<header>
+  <div style="display: flex; justify-content: space-between; align-items: center;">
+    <span>🚀 Algo Trading Dashboard</span>
+    <a href="/tick-dashboard" style="text-decoration: none;">
+      <button style="background: #3b82f6; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; color: white; font-size: 14px;">📈 Tick Dashboard</button>
+    </a>
+  </div>
+</header>
 
 <div class="container">
 
@@ -192,6 +199,7 @@
               <th>Type</th>
               <th>Entry</th>
               <th>LTP</th>
+              <th>Target</th>
               <th>PnL</th>
             </tr>
           </thead>
@@ -235,6 +243,7 @@
 const socket = io();
 let tradeData = [];
 let positionData = [];
+let tradeTargetMap = {};
 
 // SIGNALS
 socket.on("signal", d => {
@@ -319,6 +328,8 @@ async function loadPositions(){
     const ltp = p.last_price || 0;
     const pnl = p.pnl || 0;
     const cls = pnl>=0?"profit":"loss";
+    const targetPrice = tradeTargetMap[symbol] || 0;
+    const targetDisplay = targetPrice > 0 ? targetPrice.toFixed(2) : "—";
 
     positionsTable.innerHTML += `
       <tr>
@@ -327,6 +338,7 @@ async function loadPositions(){
         <td>${type}</td>
         <td>${entry}</td>
         <td>${ltp}</td>
+        <td><strong>${targetDisplay}</strong></td>
         <td class="${cls}">${pnl}</td>
       </tr>
     `;
@@ -339,12 +351,13 @@ async function loadPositions(){
 
 // DOWNLOAD POSITIONS CSV
 function downloadPositions(){
-  let csv="Symbol,Qty,Type,Entry,LTP,PnL\n";
+  let csv="Symbol,Qty,Type,Entry,LTP,Target,PnL\n";
 
   positionData.forEach(p=>{
     const symbol = p.tradingsymbol || p.trading_symbol || "";
     const type = p.quantity >= 0 ? "BUY" : "SELL";
-    csv+=`${symbol},${Math.abs(p.quantity)},${type},${p.average_price},${p.last_price},${p.pnl}\n`;
+    const targetPrice = tradeTargetMap[symbol] || 0;
+    csv+=`${symbol},${Math.abs(p.quantity)},${type},${p.average_price},${p.last_price},${targetPrice},${p.pnl}\n`;
   });
 
   const blob=new Blob([csv], { type: "text/csv" });
@@ -389,6 +402,25 @@ function downloadTrades(){
   a.click();
 }
 
+// BUILD TARGET PRICE MAP FROM TRADES
+async function buildTargetPriceMap(){
+  try {
+    const trades = await (await fetch("/trades")).json();
+    tradeTargetMap = {};
+    
+    trades.forEach(t => {
+      if (t.status === "OPEN" && t.targetPrice > 0) {
+        const key = t.tradingsymbol || t.symbol || t.instrument || "";
+        if (!tradeTargetMap[key]) {
+          tradeTargetMap[key] = t.targetPrice;
+        }
+      }
+    });
+  } catch (err) {
+    console.error("Error building target price map:", err);
+  }
+}
+
 // DAILY
 async function loadPnL(){
   const d = await (await fetch("/pnl")).json();
@@ -399,7 +431,7 @@ async function loadPnL(){
 setInterval(()=>{
   loadControl();
   loadProfile();
-  loadPositions();
+  buildTargetPriceMap().then(() => loadPositions());
   loadTrades();
   loadPnL();
 },3000);
@@ -407,8 +439,11 @@ setInterval(()=>{
 // INIT
 loadControl();
 loadProfile();
-loadPositions();
-loadTrades();
+buildTargetPriceMap().then(() => {
+  loadPositions();
+  loadTrades();
+  loadPnL();
+});
 loadPnL();
 </script>
 

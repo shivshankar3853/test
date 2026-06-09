@@ -144,6 +144,9 @@
 
     .open { background: rgba(34, 197, 94, 0.18); color: #86efac; }
     .closed { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
+    .success { background: rgba(34, 197, 94, 0.18); color: #86efac; }
+    .danger { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
+    .warning { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
 
     .code-block {
       background: #020617;
@@ -210,6 +213,9 @@
     </div>
 
     <div class="toolbar">
+      <a href="/" style="text-decoration: none;">
+        <button class="secondary">🚀 Algo Dashboard</button>
+      </a>
       <button class="primary" id="sendSignalBtn">Send Test Signal</button>
       <button class="secondary" id="reconcileBtn">Reconcile Open Trades</button>
       <button class="secondary" id="refreshBtn">Refresh</button>
@@ -271,7 +277,9 @@
             <th>Symbol</th>
             <th>Side</th>
             <th>Qty</th>
+            <th>Entry Price</th>
             <th>Target</th>
+            <th>Distance</th>
             <th>Status</th>
           </tr>
         </thead>
@@ -348,17 +356,28 @@
       tradesBody.innerHTML = "";
 
       if (!openTrades.length) {
-        tradesBody.innerHTML = `<tr><td colspan="5">No open trades.</td></tr>`;
+        tradesBody.innerHTML = `<tr><td colspan="7">No open trades.</td></tr>`;
         return;
       }
 
       openTrades.slice(0, 50).forEach((trade) => {
+        const entryPrice = Number(trade.price || 0);
+        const targetPrice = Number(trade.targetPrice || 0);
+        const distance = targetPrice > 0 ? targetPrice - entryPrice : 0;
+        const distancePercent = entryPrice > 0 ? ((distance / entryPrice) * 100).toFixed(2) : 0;
+        
+        // Color code based on target price set
+        const distanceClass = targetPrice === 0 ? "warning" : distance > 0 ? "success" : "danger";
+        const distanceText = targetPrice === 0 ? "No Target" : distance > 0 ? `+${distance.toFixed(2)} (${distancePercent}%)` : `${distance.toFixed(2)} (${distancePercent}%)`;
+        
         const row = document.createElement("tr");
         row.innerHTML = `
-          <td>${trade.symbol || trade.instrument || "-"}</td>
+          <td><strong>${trade.symbol || trade.instrument || "-"}</strong></td>
           <td>${trade.side || "-"}</td>
           <td>${trade.quantity || 0}</td>
-          <td>${Number(trade.targetPrice || 0).toFixed(2)}</td>
+          <td>${entryPrice.toFixed(2)}</td>
+          <td><strong>${targetPrice > 0 ? targetPrice.toFixed(2) : "—"}</strong></td>
+          <td><span class="pill ${distanceClass}">${distanceText}</span></td>
           <td><span class="pill open">OPEN</span></td>
         `;
         tradesBody.appendChild(row);
