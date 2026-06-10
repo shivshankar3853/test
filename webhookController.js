@@ -31,7 +31,7 @@ function normalizeSignalPayload(signal = {}) {
     disclosed_quantity: Number(source.disclosed_quantity ?? 0),
     market_protection: Number(source.MP ?? source.market_protection ?? source.marketProtection ?? NaN),
     variety: String(source.V || source.variety || "regular").trim().toLowerCase(),
-    AT: String(source.AT || source.broker || "ZERODHA").trim().toUpperCase(),
+    AT: "ZERODHA",
     TARGET: Number(source.TARGET ?? source.target ?? source.targetPrice ?? NaN),
     target_points: Number(source.target_points ?? source.targetPoints ?? source.points ?? 10),
     source: String(source.source || "tradingview").trim(),

@@ -106,10 +106,6 @@ function isAmoOrder(variety) {
   return normalizeVariety(variety) === "amo";
 }
 
-function normalizeBroker(value) {
-  return String(value || "ZERODHA").trim().toUpperCase();
-}
-
 function needsMarketProtection(orderType) {
   const normalized = String(orderType || "").trim().toUpperCase();
 
@@ -192,7 +188,7 @@ async function placeOrder(order) {
     const rawSymbol = normalizeSymbolValue(
       order.tradingsymbol || order.trading_symbol || order.TS || order.symbol
     );
-    const broker = normalizeBroker(order.broker || order.AT);
+    const broker = "ZERODHA";
 
     if (!["BUY", "SELL"].includes(action)) throw new Error("Invalid Action");
     if (!rawSymbol) throw new Error("Symbol missing");
